@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="dark light">
+  <title>Orches · AI task board</title>
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+  <header>
+    <a class="brand" href="./">◈ ORCHES <span>AI OPERATIONS</span></a>
+    <a class="github" href="https://github.com/komed-uth/Orches-AI-Kanban/issues" target="_blank" rel="noopener noreferrer">Open GitHub ↗</a>
+  </header>
+  <main>
+    <section class="intro">
+      <div><p class="eyebrow">THE WORK, IN MOTION</p><h1>Mission control.</h1><p class="subtitle">One board for every task. Powered by GitHub Issues.</p></div>
+      <a class="button" href="https://github.com/komed-uth/Orches-AI-Kanban/issues/new" target="_blank" rel="noopener noreferrer">+ New task</a>
+    </section>
+    <div class="toolbar">
+      <label class="search"><span>⌕</span><input id="search" type="search" placeholder="Search tasks, labels, or agents…" aria-label="Search tasks"></label>
+      <label class="assignee">Assignee <select id="assignee"><option value="">Everyone</option></select></label>
+      <button id="refresh" type="button">↻ Refresh</button>
+    </div>
+    <div class="sync"><span id="status" role="status" aria-live="polite">Loading task snapshot…</span><span id="total"></span></div>
+    <div id="board" class="board" aria-label="Task board"></div>
+    <noscript>Enable JavaScript to view the board. You can also view tasks directly on GitHub.</noscript>
+    <footer><span>GITHUB ISSUES → ORCHES</span><span>Update tasks and status labels on GitHub. This board checks for published updates every minute.</span></footer>
+  </main>
+  <script type="module" src="./app.mjs"></script>
+</body>
+</html>
