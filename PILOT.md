@@ -81,7 +81,7 @@ The real attempt used the two seeded tasks and independent worktrees. Run IDs we
 ## Repeatable host diagnostics and live evidence
 
 `npm run evaluate -- --data-dir /absolute/runtime --output /absolute/evidence`
-checks Linux/Node support, the configured Codex installation and host login via the
+checks Linux/Node support, required Git worktree support (Git 2.5+ on PATH), the configured Codex installation and host login via the
 application's readiness helper, and writability of the application runtime,
 `CODEX_HOME` (default `~/.codex`), and the normal temporary directory. It reads no
 credential contents, starts no application/task processes, and calls no model.
@@ -106,7 +106,7 @@ loopback application instance, uses its authenticated HTTP operations, ordered
 live events, scheduler, and Codex adapter, and starts one attempt for each seeded
 task with capacity of at least two. It inherits host identity, Codex configuration,
 and supported proxy environment; it never replaces credentials or changes network
-policy. Use a new evidence directory per attempt. Existing active runs block the
+policy. Use a new evidence directory per attempt; existing output directories are rejected before any artifact is written. Existing active runs block the
 command before application initialization; don't run this alongside another host.
 A stopped runtime with interrupted/failed attempts can be inspected and deliberately
 retried by rerunning the command. Working copies and review branches are retained.
@@ -114,7 +114,7 @@ retried by rerunning the command. Working copies and review branches are retaine
 The default live deadline is 60 seconds; `--deadline-ms` accepts 100–1,800,000 ms.
 At deadline, SIGINT, or SIGTERM, the command cancels its attempts and waits for the
 application's process-group cleanup and Git evidence capture before closing its
-listener. Cleanup may extend beyond the model-execution deadline. Proxy rejections
+listener. The event collector remains active through cleanup and drains to the final persisted cursor; a drain failure records missing evidence explicitly. Cleanup may extend beyond the model-execution deadline. Proxy rejections
 are reported as **blocked**, not successful connectivity. The summary identifies
 actual run states, observed concurrency, conversation/working-copy/review-branch
 references, verification results, and incomplete phases. It never grants approval

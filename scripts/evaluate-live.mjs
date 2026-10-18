@@ -53,14 +53,23 @@ export async function evaluateLive({
   const eventFile = join(output, "events.ndjson");
   writeFileSync(eventFile, "", { mode: 0o600, flag: "wx" });
   const controller = new AbortController();
+  // Model execution stops at the deadline. Its evidence stream stays alive
+  // until cancellation, process cleanup and Git capture have been observed.
+  const eventController = new AbortController();
   let interrupted,
     application,
     stream,
     streamTask,
     cookie = "",
     base,
-    taskIds = new Set();
+    taskIds = new Set(),
+    collectionClosing = false;
   const states = new Map();
+  const connectivityBlockers = new Map();
+  const connectivityRejected = (text = "") =>
+    /\b(?:proxy|http\s+connect|tunnel)\b[^\r\n]*(?:\b403\b|forbidden|rejected|denied)/i.test(
+      text,
+    );
   const stop = (reason) => {
     interrupted ??= reason;
     controller.abort();
@@ -107,8 +116,8 @@ export async function evaluateLive({
       [...states.values()].filter((s) =>
         ["starting", "running", "waiting", "verifying"].includes(s),
       ).length >= 2;
-    if (/proxy|CONNECT|403|forbidden/i.test(event.text ?? ""))
-      summary.phases.connectivity = "blocked";
+    if (event.runId && connectivityRejected(event.text))
+      connectivityBlockers.set(event.runId, redact(event.text).slice(0, 512));
     const safe = {
       mode: summary.mode,
       id: event.id,
@@ -155,7 +164,7 @@ export async function evaluateLive({
   const readEvents = async () => {
     const response = await fetch(
       base + "/api/events?after=" + summary.evidence.lastCursor,
-      { headers: { Cookie: cookie }, signal: controller.signal },
+      { headers: { Cookie: cookie }, signal: eventController.signal },
     );
     if (!response.ok)
       throw new Error("Authenticated event stream unavailable.");
@@ -220,19 +229,17 @@ export async function evaluateLive({
         statusId: task.statusId,
       });
       owned.initialization = run.conversationId ? "verified" : "unverified";
+      if (connectivityRejected(run.error))
+        connectivityBlockers.set(run.id, redact(run.error).slice(0, 512));
+      owned.connectivityBlocker = connectivityBlockers.get(run.id);
       owned.connectivity =
         run.verification || ["verifying", "completed"].includes(run.state)
           ? summary.mode === "synthetic-fixture"
             ? "synthetic-only"
             : "verified"
-          : /proxy|CONNECT|403|forbidden/i.test(run.error ?? "")
+          : connectivityBlockers.has(run.id)
             ? "blocked"
             : "unverified";
-      if (/proxy|CONNECT|403|forbidden/i.test(run.error ?? ""))
-        summary.phases.connectivity = "blocked";
-      if (["verifying", "completed"].includes(run.state) || run.verification)
-        summary.phases.connectivity =
-          summary.mode === "synthetic-fixture" ? "synthetic-only" : "verified";
     }
   };
   try {
@@ -276,12 +283,19 @@ export async function evaluateLive({
       { executable, capacity: Math.max(2, snapshot.settings.capacity) },
       "PATCH",
     );
-    streamTask = readEvents().catch((error) => {
-      if (!controller.signal.aborted) {
-        summary.evidence.missing = true;
-        stop("event-stream-failed");
-      }
-    });
+    streamTask = readEvents()
+      .then(() => {
+        if (!collectionClosing) {
+          summary.evidence.missing = true;
+          stop("event-stream-ended");
+        }
+      })
+      .catch(() => {
+        if (!eventController.signal.aborted) {
+          summary.evidence.missing = true;
+          stop("event-stream-failed");
+        }
+      });
     // Separate requests retain each acknowledged run even if a later start fails.
     for (const task of tasks) {
       const { run } = await api("/tasks/" + task.id + "/run", {});
@@ -320,15 +334,43 @@ export async function evaluateLive({
       await application.scheduler.close();
       try {
         await refresh(AbortSignal.timeout(2000));
+        const { cursor } = await api(
+          "/snapshot",
+          undefined,
+          "GET",
+          AbortSignal.timeout(2000),
+        );
+        summary.evidence.cleanupCursor = cursor;
+        const drainDeadline = Date.now() + 1000;
+        while (
+          summary.evidence.lastCursor < cursor &&
+          Date.now() < drainDeadline
+        )
+          await delay(10);
+        if (summary.evidence.lastCursor < cursor) {
+          summary.evidence.missing = true;
+          summary.evidence.missingRange = {
+            after: summary.evidence.lastCursor,
+            through: cursor,
+          };
+          summary.evidence.affectedRuns = [
+            ...new Set([
+              ...summary.evidence.affectedRuns,
+              ...summary.runs.map((r) => r.id),
+            ]),
+          ];
+        }
       } catch {
         summary.evidence.missing = true;
       }
+      collectionClosing = true;
       try {
         await api("/logout", {}, "POST", AbortSignal.timeout(2000));
       } catch {}
       await application.close();
     }
     controller.abort();
+    eventController.abort();
     await stream?.cancel().catch(() => {});
     await streamTask;
     clearTimeout(timer);

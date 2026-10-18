@@ -1,8 +1,10 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
-import { resolve, join } from "node:path";
+import { resolve, join, dirname } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { inspectCodexHost } from "../server/codex.mjs";
 
 const args = process.argv.slice(2);
@@ -28,6 +30,10 @@ const redact = (value) =>
       String(value),
     )
     .replace(
+      /(\\?["'](?:authorization|(?:set-)?cookie|orches_session|password|token|api[_-]?key)\\?["']\s*:\s*)(\\?["'])([\s\S]*?)\2/gi,
+      "$1$2[REDACTED]$2",
+    )
+    .replace(
       /((?:authorization|(?:set-)?cookie)\s*:\s*)[^\r\n\"]+/gi,
       "$1[REDACTED]",
     )
@@ -51,14 +57,17 @@ const summary = {
   outcome: "incomplete",
 };
 try {
-  await mkdir(output, { recursive: true, mode: 0o700 });
+  await mkdir(dirname(output), { recursive: true, mode: 0o700 });
+  // Reserve the entire export atomically, including diagnostic summaries.
+  // Concurrent or repeated invocations must never replace earlier evidence.
+  await mkdir(output, { mode: 0o700 });
 } catch {
   console.log(
     JSON.stringify({
       mode: summary.mode,
       outcome: "blocked",
       blocker:
-        "Cannot create evidence output directory. Select a writable --output path.",
+        "Cannot create unused evidence output directory. Select a new writable --output path; existing artifacts are preserved.",
     }),
   );
   process.exit(2);
@@ -97,6 +106,22 @@ try {
   }
   const executable = value("--executable", settings.executable ?? "codex");
   summary.host = await inspectCodexHost({ executable });
+  try {
+    const { stdout } = await promisify(execFile)("git", ["--version"], {
+      timeout: 10000,
+      maxBuffer: 4096,
+    });
+    const version = /^git version (\d+)\.(\d+)/.exec(stdout);
+    summary.host.gitWorktreeSupported = Boolean(
+      version &&
+      (Number(version[1]) > 2 ||
+        (Number(version[1]) === 2 && Number(version[2]) >= 5)),
+    );
+  } catch {
+    summary.host.gitWorktreeSupported = false;
+  }
+  if (!summary.host.gitWorktreeSupported)
+    summary.blocker = "Install Git with worktree support (2.5+) on PATH.";
   const [major, minor] = process.versions.node.split(".").map(Number);
   summary.host.supported =
     process.platform === "linux" &&
@@ -124,6 +149,7 @@ try {
     summary.host.installed &&
     summary.host.loggedIn &&
     summary.host.supported &&
+    summary.host.gitWorktreeSupported &&
     summary.host.runtimeWritable &&
     summary.host.codexRuntimeWritable &&
     summary.host.temporaryWritable
