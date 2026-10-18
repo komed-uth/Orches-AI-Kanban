@@ -109,41 +109,43 @@ function App() {
       } while (dirty && !closed);
       running = false;
     };
-    const source = new EventSource(
-      `/api/events?after=${snapshot?.cursor || 0}`,
-    );
-    stream.current = source;
-    source.onopen = () => {
+    let source;
+    let cursor = snapshot?.cursor || 0;
+    const connect = () => {
       if (closed) return;
-      setConnection("live");
-      if (reconnecting) reconcile();
-      reconnecting = true;
-    };
-    source.onmessage = () => reconcile();
-    // Named server events also trigger reconciliation. Events carry references; snapshots remain authoritative.
-    for (const type of [
-      "change",
-      "snapshot",
-      "task",
-      "run",
-      "message",
-      "request",
-      "settings",
-      "project",
-      "task.updated",
-      "run.updated",
-      "run.event",
-    ])
-      source.addEventListener(type, reconcile);
-    source.onerror = () => {
-      if (!closed) {
-        setConnection("reconnecting");
+      source?.close();
+      source = new EventSource(`/api/events?after=${cursor}`);
+      stream.current = source;
+      source.onopen = () => {
+        if (closed) return;
+        setConnection("live");
+        if (reconnecting) reconcile();
+        reconnecting = true;
+      };
+      source.onmessage = (event) => {
+        cursor = Number(event.lastEventId) || cursor;
         reconcile();
-      }
+      };
+      source.onerror = () => {
+        if (!closed) {
+          setConnection("reconnecting");
+          reconcile();
+        }
+      };
     };
+    const offline = () => {
+      source?.close();
+      setConnection("reconnecting");
+    };
+    window.addEventListener("offline", offline);
+    window.addEventListener("online", connect);
+    if (navigator.onLine) connect();
+    else offline();
     return () => {
       closed = true;
-      source.close();
+      source?.close();
+      window.removeEventListener("offline", offline);
+      window.removeEventListener("online", connect);
       stream.current = null;
     };
   }, [auth, refresh]);

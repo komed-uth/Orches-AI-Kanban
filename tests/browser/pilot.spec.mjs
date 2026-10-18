@@ -220,3 +220,112 @@ test("owner configures capacity and workflow without launching work and sees hos
   await page.getByRole("button", { name: "Add project", exact: true }).click();
   await expect(page.getByRole("alert")).toContainText(/repository|revision/);
 });
+
+test("cancellation preserves attempt history and reconnection restores activity", async ({
+  page,
+  context,
+}) => {
+  await page.goto("/");
+  await page.getByLabel("Username", { exact: true }).fill("pilot-owner");
+  await page.getByLabel("Password", { exact: true }).fill("pilot-password-123");
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toBeVisible();
+  const snapshot = await (await page.request.get("/api/snapshot")).json();
+  await page.request.post("/api/tasks", {
+    data: {
+      projectId: snapshot.projects[0].id,
+      title: "Browser cancel task",
+      discipline: "qa",
+      priority: "medium",
+    },
+  });
+  await page
+    .getByRole("button", { name: "Browser cancel task", exact: true })
+    .click();
+  await page.getByRole("button", { name: "Start agent", exact: true }).click();
+  await expect(
+    page.getByText("DETERMINISTIC TEST FIXTURE — no model execution."),
+  ).toBeVisible();
+  await context.setOffline(true);
+  await expect(
+    page.getByText("Reconnecting to host…", { exact: true }),
+  ).toBeVisible();
+  await context.setOffline(false);
+  await expect(
+    page.getByText("Live updates connected", { exact: true }),
+  ).toBeVisible({ timeout: 15000 });
+  await page
+    .getByRole("button", { name: "Cancel attempt", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Retry / new attempt", exact: true }),
+  ).toBeEnabled();
+  await page.getByRole("button", { name: "History", exact: true }).click();
+  await expect(
+    page.locator(".history-entry").getByText("cancelled", { exact: true }),
+  ).toBeVisible();
+  await page
+    .getByRole("button", { name: "Retry / new attempt", exact: true })
+    .click();
+  await page
+    .getByRole("button", { name: "Cancel attempt", exact: true })
+    .click();
+  await expect(page.locator(".history-entry")).toHaveCount(2);
+});
+
+test("a failed task retries explicitly and retains its first outcome", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.getByLabel("Username", { exact: true }).fill("pilot-owner");
+  await page.getByLabel("Password", { exact: true }).fill("pilot-password-123");
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toBeVisible();
+  const snapshot = await (await page.request.get("/api/snapshot")).json();
+  await page.request.post("/api/tasks", {
+    data: {
+      projectId: snapshot.projects[0].id,
+      title: "Browser retry task",
+      discipline: "programming",
+      priority: "medium",
+    },
+  });
+  await page
+    .getByRole("button", { name: "Browser retry task", exact: true })
+    .click();
+  await page.getByRole("button", { name: "Start agent", exact: true }).click();
+  await expect(
+    page.getByText("Intentional browser fixture failure; retry explicitly.", {
+      exact: true,
+    }),
+  ).toBeVisible();
+  await page
+    .getByRole("button", { name: "Retry / new attempt", exact: true })
+    .click();
+  await page
+    .getByRole("button", { name: "Approve execution", exact: true })
+    .click();
+  await page.getByLabel("What color should the gem be?").fill("Green");
+  await page.getByRole("button", { name: "Send answer", exact: true }).click();
+  await page
+    .getByRole("button", { name: "Changes & review", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", {
+      name: "Accept verified work → Done",
+      exact: true,
+    }),
+  ).toBeEnabled();
+  await page.getByRole("button", { name: "History", exact: true }).click();
+  await expect(page.locator(".history-entry")).toHaveCount(2);
+  await expect(
+    page.locator(".history-entry").getByText("failed", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.locator(".history-entry").getByText("completed", { exact: true }),
+  ).toBeVisible();
+});

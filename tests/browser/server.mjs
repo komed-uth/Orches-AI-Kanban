@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createApplication } from "../../server/app.mjs";
 const dataDir = await mkdtemp(join(tmpdir(), "orches-browser-"));
+const attempts = new Map();
 // This test-only runner is deterministic. It never invokes Codex or a model.
 function runnerFactory({
   task,
@@ -26,6 +27,12 @@ function runnerFactory({
     });
   return {
     async run() {
+      const attempt = (attempts.get(task.id) || 0) + 1;
+      attempts.set(task.id, attempt);
+      if (task.title.includes("retry") && attempt === 1)
+        throw new Error(
+          "Intentional browser fixture failure; retry explicitly.",
+        );
       onConversation(task.conversationId || `fixture-${task.id}`);
       onEvent({
         type: "assistant",
