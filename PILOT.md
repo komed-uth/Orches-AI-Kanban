@@ -68,7 +68,7 @@ Observed on 2026-10-18 with Node 24.19.0, Chromium, Git, and Codex CLI 0.159.2 l
 | --- | --- |
 | Install, application tests, production build | Passed: npm install/ci, npm test, npm run build |
 | Sample baseline tests | Passed: all five bundled game baseline tests |
-| Focused browser smoke: owner/member, shared updates, movement, settings, chat, request, cancellation, review/acceptance | Passed: five Chromium smoke scenarios, including two-session updates, approvals/questions, cancellation, retry, acceptance, workflow/capacity settings, and disconnect/reconnect |
+| Focused browser smoke: owner/member, shared updates, movement, settings, chat, request, cancellation, review/acceptance | Passed: six Chromium smoke scenarios, including two-session updates, approvals/questions, cancellation, retry, acceptance, workflow/capacity settings, disconnect/reconnect, and host restart |
 | Real Codex: two overlapping sample tasks, changes, tests, follow-up, human review | BLOCKED: two real app-server sessions overlapped, but model requests were rejected by the environment proxy (HTTP CONNECT 403); no model edits or successful live verification |
 | Explicit failure/retry, reconnect, restart recovery | Passed via authenticated HTTP with real SQLite/Git and the controlled external runner fixture; browser checks cover failure/retry/reconnect |
 

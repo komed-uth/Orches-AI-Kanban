@@ -80,8 +80,20 @@ function runnerFactory({
     },
   };
 }
-const application = await createApplication({ dataDir, runnerFactory });
-application.app.listen(4319, "127.0.0.1");
+let application;
+async function boot() {
+  application = await createApplication({ dataDir, runnerFactory });
+  // Test-harness control only; this route is absent from the production application.
+  application.app.post("/__fixture/restart", (req, res) => {
+    res.json({ restarting: true });
+    setImmediate(async () => {
+      await application.close();
+      await boot();
+    });
+  });
+  application.app.listen(4319, "127.0.0.1");
+}
+await boot();
 async function shutdown() {
   await application.close();
   await rm(dataDir, { recursive: true, force: true });

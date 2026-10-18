@@ -332,3 +332,60 @@ test("a failed task retries explicitly and retains its first outcome", async ({
     page.locator(".history-entry").getByText("completed", { exact: true }),
   ).toBeVisible();
 });
+
+test("host restart retains interrupted evidence and waits for an explicit retry", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.getByLabel("Username", { exact: true }).fill("pilot-owner");
+  await page.getByLabel("Password", { exact: true }).fill("pilot-password-123");
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "Sign out", exact: true }),
+  ).toBeVisible();
+  const initial = await (await page.request.get("/api/snapshot")).json();
+  const created = await (
+    await page.request.post("/api/tasks", {
+      data: {
+        projectId: initial.projects[0].id,
+        title: "Browser restart cancel task",
+        discipline: "programming",
+        priority: "medium",
+      },
+    })
+  ).json();
+  await page
+    .getByRole("button", { name: "Browser restart cancel task", exact: true })
+    .click();
+  await page.getByRole("button", { name: "Start agent", exact: true }).click();
+  await expect(
+    page.getByText("DETERMINISTIC TEST FIXTURE — no model execution."),
+  ).toBeVisible();
+  await page.request.post("/__fixture/restart");
+  await expect
+    .poll(async () => {
+      try {
+        const snapshot = await (await page.request.get("/api/snapshot")).json();
+        return snapshot.runs?.find((r) => r.taskId === created.task.id)?.state;
+      } catch {
+        return "restarting";
+      }
+    })
+    .toBe("interrupted");
+  await page.reload();
+  await page
+    .getByRole("button", { name: "Browser restart cancel task", exact: true })
+    .click();
+  await page.getByRole("button", { name: "History", exact: true }).click();
+  await expect(
+    page.locator(".history-entry").getByText("interrupted", { exact: true }),
+  ).toBeVisible();
+  await expect(page.locator(".history-entry")).toHaveCount(1);
+  await page
+    .getByRole("button", { name: "Retry / new attempt", exact: true })
+    .click();
+  await expect(page.locator(".history-entry")).toHaveCount(2);
+  await page
+    .getByRole("button", { name: "Cancel attempt", exact: true })
+    .click();
+});
