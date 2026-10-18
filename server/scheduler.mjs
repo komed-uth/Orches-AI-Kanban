@@ -48,6 +48,9 @@ export function createScheduler({ store, dataDir, runnerFactory = createCodexRun
     };
     for (const message of messages) if (message.queuedForNextAttempt) { message.queuedForNextAttempt = false; message.runId = run.id; }
     task.acceptedBy = null; task.acceptedAt = null;
+    if (['done', 'review'].includes(project.statuses.find((status) => status.id === task.statusId)?.kind)) {
+      task.statusId = kindStatus(project, 'ready') ?? kindStatus(project, 'execution') ?? task.statusId;
+    }
     store.state.runs.push(run);
     event('run.queued', task, run, { state: 'queued' });
     event('task.updated', task, run);
