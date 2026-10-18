@@ -14,6 +14,7 @@ export function createCodexRunner({
   onEvent = () => {},
   onRequest = () => {},
   onConversation = () => {},
+  onInputAccepted = () => {},
 }) {
   let child,
     seq = 0,
@@ -236,7 +237,7 @@ export function createCodexRunner({
             task.description,
             task.acceptanceCriteria,
             config.instructions ?? project.rule?.instructions,
-            ...(task.messages || [])
+            ...(run.input?.messages ?? task.messages ?? [])
               .filter((m) => m.role === "human" || m.role === "user")
               .map((m) => m.text),
           ]
@@ -249,6 +250,7 @@ export function createCodexRunner({
           ...(config.model ? { model: config.model } : {}),
         });
         turnId = started.turn?.id;
+        onInputAccepted();
         await turn;
       } finally {
         clearTimeout(timer);

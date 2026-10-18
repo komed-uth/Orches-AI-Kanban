@@ -2,8 +2,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, mkdir, writeFile, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { execFileSync } from "node:child_process";
+import { join, resolve } from "node:path";
+import { execFileSync, fork } from "node:child_process";
+import { once } from "node:events";
 import { createServer } from "node:http";
 import { createApplication } from "../server/app.mjs";
 
@@ -16,7 +17,7 @@ function deferred() {
   return { promise, resolve, reject };
 }
 
-async function fixture(t) {
+async function fixture(t, { externalHost = false } = {}) {
   const root = await mkdtemp(join(tmpdir(), "orches-execution-"));
   const repo = join(root, "source");
   await mkdir(repo);
@@ -54,8 +55,19 @@ async function fixture(t) {
       },
     };
   };
-  let application, server, base, cookie, opened;
+  let application, server, base, cookie, opened, child;
   async function open() {
+    if (externalHost) {
+      child = fork(
+        resolve("tests/fixtures/recovery-host.mjs"),
+        [join(root, "data")],
+        { stdio: ["ignore", "ignore", "inherit", "ipc"] },
+      );
+      const [message] = await once(child, "message");
+      base = `http://127.0.0.1:${message.port}`;
+      opened = true;
+      return;
+    }
     application = await createApplication({
       dataDir: join(root, "data"),
       runnerFactory,
@@ -67,9 +79,19 @@ async function fixture(t) {
   }
   async function close() {
     if (!opened) return;
+    if (externalHost) {
+      await stopHost("SIGTERM");
+      return;
+    }
     await application.close();
     server.closeAllConnections();
     await new Promise((resolve) => server.close(resolve));
+    opened = false;
+  }
+  async function stopHost(signal) {
+    const stopped = once(child, "exit");
+    child.kill(signal);
+    await stopped;
     opened = false;
   }
   await open();
@@ -143,7 +165,18 @@ async function fixture(t) {
       `Task did not reach ${state}: ${JSON.stringify((await api(`/tasks/${id}`)).body)}`,
     );
   }
-  return { api, task, started, until, project, repo, sessions, close, open };
+  return {
+    api,
+    task,
+    started,
+    until,
+    project,
+    repo,
+    sessions,
+    close,
+    open,
+    abrupt: () => stopHost("SIGKILL"),
+  };
 }
 
 test("a task streams attributed evidence, verifies actual isolated changes and reaches Review", async (t) => {
@@ -629,16 +662,167 @@ test("restart retains interrupted work, conversations and queue evidence without
   assert.equal((await f.api(`/tasks/${queued.id}`)).body.runs.length, 1);
 });
 
-test('a task cannot enter Review when its actual Git evidence is unavailable', async (t) => {
+test("a task cannot enter Review when its actual Git evidence is unavailable", async (t) => {
   const f = await fixture(t);
-  const task = await f.task('missing evidence');
+  const task = await f.task("missing evidence");
   await f.api(`/tasks/${task.id}/run`, {});
   const session = await f.started(task.id);
-  await rm(join(session.cwd, '.git'));
+  await rm(join(session.cwd, ".git"));
   session.gate.resolve();
-  const failed = await f.until(task.id, 'failed');
-  assert.equal(failed.task.statusId, 'blocked');
+  const failed = await f.until(task.id, "failed");
+  assert.equal(failed.task.statusId, "blocked");
   assert.match(failed.runs[0].error, /evidence/i);
   assert.ok(failed.runs[0].evidenceError);
   assert.equal((await f.api(`/tasks/${task.id}/accept`, {})).status, 409);
+});
+
+test("project verification edits apply to inherited commands while explicit automation overrides survive", async (t) => {
+  const f = await fixture(t);
+  const buildCommand = "node -e \"console.log('new project build')\"";
+  const testCommand = "node -e \"console.log('new project test')\"";
+  assert.equal(
+    (
+      await f.api(
+        `/projects/${f.project.id}`,
+        { buildCommand, testCommand },
+        "PATCH",
+      )
+    ).status,
+    200,
+  );
+  const first = await f.task();
+  await f.api(`/tasks/${first.id}/run`, {});
+  (await f.started(first.id)).gate.resolve();
+  const inherited = (await f.until(first.id, "completed")).runs[0];
+  assert.deepEqual(
+    inherited.verification.results.map(({ command }) => command),
+    [buildCommand, testCommand],
+  );
+  assert.match(inherited.verification.results[1].output, /new project test/);
+  const override = "node -e \"console.log('explicit automation test')\"";
+  const project = (await f.api("/projects")).body.projects.find(
+    ({ id }) => id === f.project.id,
+  );
+  await f.api(
+    `/projects/${project.id}/workflow`,
+    {
+      statuses: project.statuses,
+      rule: { ...project.rule, testCommand: override },
+    },
+    "PUT",
+  );
+  await f.api(
+    `/projects/${project.id}`,
+    { testCommand: 'node -e "process.exit(9)"' },
+    "PATCH",
+  );
+  const second = await f.task();
+  await f.api(`/tasks/${second.id}/run`, {});
+  (await f.started(second.id)).gate.resolve();
+  const explicit = (await f.until(second.id, "completed")).runs[0];
+  assert.equal(explicit.verification.results[1].command, override);
+  assert.match(
+    explicit.verification.results[1].output,
+    /explicit automation test/,
+  );
+  const equalCommand = "node -e \"console.log('intentional equal override')\"";
+  await f.api(
+    `/projects/${project.id}`,
+    { testCommand: equalCommand },
+    "PATCH",
+  );
+  await f.api(
+    `/projects/${project.id}/workflow`,
+    {
+      statuses: project.statuses,
+      rule: { ...project.rule, testCommand: equalCommand },
+    },
+    "PUT",
+  );
+  await f.close();
+  await f.open();
+  await f.api(
+    `/projects/${project.id}`,
+    { testCommand: 'node -e "process.exit(8)"' },
+    "PATCH",
+  );
+  const third = await f.task();
+  await f.api(`/tasks/${third.id}/run`, {});
+  (await f.started(third.id)).gate.resolve();
+  assert.equal(
+    (await f.until(third.id, "completed")).runs[0].verification.results[1]
+      .command,
+    equalCommand,
+  );
+});
+
+test("resumed attempts send each new human instruction once and retain instructions from cancelled queued work", async (t) => {
+  const f = await fixture(t);
+  const task = await f.task();
+  await f.api(`/tasks/${task.id}/messages`, {
+    text: "First instruction only.",
+  });
+  const first = await f.started(task.id);
+  await f.api(`/tasks/${task.id}/messages`, {
+    text: "Queued next instruction.",
+  });
+  first.gate.resolve();
+  await f.until(task.id, "completed");
+  await f.api(`/tasks/${task.id}/messages`, {
+    text: "Second direct instruction.",
+  });
+  const second = await f.started(task.id, first.run.id);
+  assert.deepEqual(
+    second.run.input.messages.map(({ text }) => text),
+    ["Queued next instruction.", "Second direct instruction."],
+  );
+  second.gate.resolve();
+  await f.until(task.id, "completed");
+  await f.api("/settings", { capacity: 1 }, "PATCH");
+  const holder = await f.task("hold");
+  await f.api(`/tasks/${holder.id}/run`, {});
+  const holding = await f.started(holder.id);
+  const queued = await f.api(`/tasks/${task.id}/messages`, {
+    text: "Still undelivered.",
+  });
+  await f.api(`/runs/${queued.body.run.id}/cancel`, {});
+  await f.api(`/tasks/${task.id}/run`, {});
+  holding.gate.resolve();
+  const third = await f.started(task.id, second.run.id);
+  assert.deepEqual(
+    third.run.input.messages.map(({ text }) => text),
+    ["Still undelivered."],
+  );
+  third.gate.resolve();
+  const final = await f.until(task.id, "completed");
+  assert.equal(
+    final.task.messages.filter(({ role }) => role === "human").length,
+    4,
+  );
+});
+
+test("abrupt host death recovers actual interrupted Git evidence before serving the board", async (t) => {
+  const f = await fixture(t, { externalHost: true });
+  const task = await f.task("abrupt recovery");
+  await f.api(`/tasks/${task.id}/run`, {});
+  const active = await f.until(task.id, "running");
+  assert.equal(
+    await readFile(join(active.task.worktree, "shared.txt"), "utf8"),
+    "partial from abruptly stopped agent\n",
+  );
+  await f.abrupt();
+  await f.open();
+  const recovered = (await f.api(`/tasks/${task.id}`)).body;
+  assert.equal(recovered.runs.length, 1);
+  assert.equal(recovered.runs[0].state, "interrupted");
+  assert.match(recovered.runs[0].diff, /partial from abruptly stopped agent/);
+  assert.match(recovered.runs[0].diff, /untracked recovery evidence/);
+  assert.ok(
+    recovered.runs[0].files.some(({ path }) => path === "new-recovery.txt"),
+  );
+  assert.equal(recovered.task.conversationId, "retained-crash-conversation");
+  assert.equal(
+    await readFile(join(f.repo, "shared.txt"), "utf8"),
+    "original\n",
+  );
 });

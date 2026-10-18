@@ -5,6 +5,28 @@ import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { createCodexRunner } from "../server/codex.mjs";
 const executable = resolve("tests/fixtures/codex-protocol.mjs");
+test("resumed Codex sends only the current attempt input and acknowledges successful turn delivery", async (t) => {
+  const cwd = await mkdtemp(tmpdir() + "/protocol-");
+  t.after(() => rm(cwd, { recursive: true, force: true }));
+  let accepted = 0;
+  await createCodexRunner({
+    run: {
+      config: { executable },
+      input: { messages: [{ role: "human", text: "New follow-up." }] },
+    },
+    task: {
+      title: "implement",
+      conversationId: "retained-thread",
+      messages: [{ role: "human", text: "Historical instruction." }],
+    },
+    cwd,
+    onInputAccepted: () => accepted++,
+  }).run();
+  const prompt = await readFile(cwd + "/prompt.txt", "utf8");
+  assert.match(prompt, /New follow-up/);
+  assert.doesNotMatch(prompt, /Historical instruction/);
+  assert.equal(accepted, 1);
+});
 test("Codex subprocess streams a turn, captures its conversation and writes only its cwd", async (t) => {
   const cwd = await mkdtemp(tmpdir() + "/protocol-");
   t.after(() => rm(cwd, { recursive: true, force: true }));

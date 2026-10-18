@@ -21,7 +21,7 @@ const copy = (value) => structuredClone(value);
 
 // Every scheduling decision and its corresponding task mutation commits in the
 // same synchronous SQLite transaction. No asynchronous work enters that boundary.
-export function createScheduler({
+export async function createScheduler({
   store,
   dataDir,
   runnerFactory = createCodexRunner,
@@ -104,7 +104,9 @@ export function createScheduler({
         title: task.title,
         description: task.description,
         acceptanceCriteria: task.acceptanceCriteria,
-        messages: messages.filter((message) => message.role === "human"),
+        messages: messages.filter(
+          (message) => message.role === "human" && !message.deliveredAt,
+        ),
       }),
     };
     for (const message of messages)
@@ -244,6 +246,19 @@ export function createScheduler({
       store.transaction(() => {
         Object.assign(run, { tmpDir, port });
       });
+      const inputAccepted = () =>
+        store.transaction(() => {
+          for (const sent of run.input.messages) {
+            const message = task.messages.find(({ id }) => id === sent.id);
+            if (message && !message.deliveredAt)
+              Object.assign(message, {
+                deliveredAt: now(),
+                deliveredRunId: run.id,
+              });
+          }
+          run.inputAcceptedAt ??= now();
+          event("run.input-accepted", task, run);
+        });
       const runner = await runnerFactory({
         run: copy(run),
         task: { ...copy(task), ...copy(run.input) },
@@ -261,6 +276,7 @@ export function createScheduler({
             event("task.updated", task, run);
           });
         },
+        onInputAccepted: inputAccepted,
       });
       control.runner = runner;
       if (control.signal.aborted) throw new Error("Attempt stopped.");
@@ -276,6 +292,7 @@ export function createScheduler({
         event("task.updated", task, run);
       });
       await runner.run();
+      if (!run.inputAcceptedAt) inputAccepted();
       if (control.signal.aborted) throw new Error("Attempt stopped.");
       if (run.requests.some((entry) => entry.state === "pending"))
         throw new Error(
@@ -302,7 +319,9 @@ export function createScheduler({
         );
       if (control.signal.aborted) throw new Error("Attempt stopped.");
       if (!(await capture(run)))
-        throw new Error("Cannot collect Git review evidence. Restore the task working copy before retrying.");
+        throw new Error(
+          "Cannot collect Git review evidence. Restore the task working copy before retrying.",
+        );
       if (control.signal.aborted) throw new Error("Attempt stopped.");
       store.transaction(() => {
         changeState(run, "completed", {
@@ -494,6 +513,7 @@ export function createScheduler({
     });
   }
   // A durable queue is evidence of intent, not permission to restart processes.
+  const interrupted = store.state.runs.filter((run) => occupied.has(run.state));
   store.transaction(() => {
     for (const run of store.state.runs)
       if (occupied.has(run.state)) {
@@ -508,6 +528,11 @@ export function createScheduler({
         event("task.updated", task, run);
       }
   });
+  // The application does not begin serving requests until retained changes are
+  // available, including changes made after the last persisted output event.
+  await Promise.all(
+    interrupted.filter((run) => taskById(run.taskId).worktree).map(capture),
+  );
   async function close() {
     closing = true;
     store.transaction(() => {
