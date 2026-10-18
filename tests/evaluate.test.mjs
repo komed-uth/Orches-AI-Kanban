@@ -203,7 +203,10 @@ for (const mode of ["blocked", "mixed", "timeout", "noisy"])
       assert.equal(s.phases.connectivity, "unverified");
     }
     if (mode === "noisy") {
-      assert.equal(s.outcome, "incomplete-evidence");
+      assert.equal(
+        s.outcome,
+        s.termination === "deadline" ? "incomplete" : "incomplete-evidence",
+      );
       assert.equal(s.evidence.missing, true);
       assert.ok(s.evidence.truncatedEvents > 0);
       assert.ok(s.evidence.omittedEvents > 0);
