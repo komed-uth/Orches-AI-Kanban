@@ -44,6 +44,26 @@ export async function createApplication({dataDir=resolve('.orches-data'),runnerF
  app.get('/api/events',(req,res)=>{const after=Number(req.headers['last-event-id']??req.query.after??0);if(!Number.isSafeInteger(after)||after<0)fail(400,'Invalid event cursor.');res.set({'Content-Type':'text/event-stream','Cache-Control':'no-cache','Connection':'keep-alive'});res.flushHeaders();const send=event=>res.write(`id: ${event.id}\ndata: ${JSON.stringify(event)}\n\n`);const unsubscribe=store.subscribe(send);for(const event of store.state.events)if(event.id>after)send(event);const token=req.session.token;if(!streams.has(token))streams.set(token,new Set());streams.get(token).add(res);const heartbeat=setInterval(()=>{if(!sessionOf(req))res.end();else res.write(': heartbeat\n\n');},15000);req.on('close',()=>{clearInterval(heartbeat);unsubscribe();streams.get(token)?.delete(res);});});
  app.get('/api/projects',(req,res)=>res.json({projects:store.state.projects}));
  app.get('/api/tasks/:id',(req,res)=>{const task=store.state.tasks.find(x=>x.id===req.params.id);if(!task)fail(404,'Task not found.');res.json({task,runs:store.state.runs.filter(x=>x.taskId===task.id)});});
+ const findProject=id=>{const project=store.state.projects.find(x=>x.id===id);if(!project)fail(404,'Project not found.');return project;};
+ const findTask=id=>{const task=store.state.tasks.find(x=>x.id===id);if(!task)fail(404,'Task not found.');return task;};
+ const validFields=(body,project)=>{
+  const fields={};for(const key of ['title','description','acceptanceCriteria','discipline','priority','assigneeId'])if(Object.hasOwn(body,key))fields[key]=body[key];
+  for(const key of ['title','description','acceptanceCriteria'])if(Object.hasOwn(fields,key)&&(typeof fields[key]!=='string'||fields[key].length>50000))fail(400,`Invalid ${key}.`);
+  if(Object.hasOwn(fields,'title')&&!fields.title.trim())fail(400,'Task title is required.');
+  if(fields.discipline&&!['programming','qa','design','art','animation','audio'].includes(fields.discipline))fail(400,'Unknown discipline.');
+  if(fields.priority&&!['low','medium','high','urgent'].includes(fields.priority))fail(400,'Unknown priority.');
+  if(fields.assigneeId!==undefined&&fields.assigneeId!==null&&!store.state.users.some(x=>x.id===fields.assigneeId))fail(400,'Unknown assignee.');
+  if(body.statusId!==undefined&&!project.statuses.some(x=>x.id===body.statusId))fail(400,'Unknown project status.');
+  return fields;
+ };
+ app.post('/api/tasks',(req,res)=>{const project=findProject(req.body.projectId);const fields=validFields(req.body,project);if(!fields.title)fail(400,'Task title is required.');const statusId=req.body.statusId??project.statuses.find(x=>x.kind==='backlog').id;if(project.statuses.find(x=>x.id===statusId).kind!=='backlog')fail(400,'Create tasks in Backlog, then move them to start work.');const task={id:randomUUID(),projectId:project.id,title:'',description:'',acceptanceCriteria:'',discipline:'programming',priority:'medium',assigneeId:null,...fields,statusId,messages:[]};store.transaction(s=>{s.tasks.push(task);store.event('task.created',{taskId:task.id,projectId:project.id});});res.status(201).json({task});});
+ app.patch('/api/tasks/:id',async(req,res)=>{const task=findTask(req.params.id);const project=findProject(task.projectId);const fields=validFields(req.body,project);const statusId=req.body.statusId;
+  if(statusId!==undefined&&statusId!==task.statusId){if(scheduler)await scheduler.transition(task.id,statusId,req.user.id);else {const status=project.statuses.find(x=>x.id===statusId);if(['execution','review','done'].includes(status.kind))fail(409,'This stage requires execution and human review.');store.transaction(()=>{task.statusId=statusId;});}}
+  store.transaction(()=>{Object.assign(task,fields);store.event('task.updated',{taskId:task.id,projectId:project.id});});res.json({task:findTask(task.id)});
+ });
+ const execute=(method)=>async(req,res)=>{if(!scheduler)fail(503,'Task execution is unavailable.');const id=req.params.id;let result;if(method==='start')result=await scheduler.start(id,req.user.id,req.body.requestKey);if(method==='message')result=await scheduler.message(id,req.body.text,req.user.id);if(method==='accept')result=await scheduler.accept(id,req.user.id);if(method==='cancel')result=await scheduler.cancel(id,req.user.id);if(method==='respond')result=await scheduler.respond(id,req.params.requestId,req.body.response,req.user.id);res.json(method==='start'?{run:result}:method==='accept'?{task:result}:result??{ok:true});};
+ app.post('/api/tasks/:id/run',execute('start'));app.post('/api/tasks/:id/messages',execute('message'));app.post('/api/tasks/:id/accept',execute('accept'));app.post('/api/runs/:id/cancel',execute('cancel'));app.post('/api/runs/:id/requests/:requestId',execute('respond'));
+
  app.get('/api/settings',(req,res)=>res.json({settings:store.state.settings}));
  if(existsSync(join(root,'dist'))) {app.use(express.static(join(root,'dist')));app.get(/^(?!\/api).*/,(req,res)=>res.sendFile(join(root,'dist/index.html')));}
  else app.get('/',(req,res)=>res.type('html').send('<!doctype html><html><body><h1>Orches AI Kanban</h1><p>Run npm run build to build the browser application.</p></body></html>'));

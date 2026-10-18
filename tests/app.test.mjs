@@ -25,3 +25,15 @@ test('owner setup, authenticated sample board and sessions survive restart witho
  response=await fetch(base+'/api/login',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({username:'owner',password:'long-password'})}); assert.equal(response.status,200);
  } finally {await application?.close(); await rm(dataDir,{recursive:true,force:true});}
 });
+
+test('tasks validate references and protect execution metadata while preserving ordinary edits', async()=>{
+ const dataDir=await mkdtemp(join(tmpdir(),'orches-task-'));const application=await createApplication({dataDir});const server=application.app.listen(0,'127.0.0.1');await new Promise(r=>server.once('listening',r));const base=`http://127.0.0.1:${server.address().port}`;let cookie;
+ const request=async(path,method='GET',body)=>{const res=await fetch(base+path,{method,headers:{'content-type':'application/json',...(cookie?{cookie}:{})},...(body?{body:JSON.stringify(body)}:{})});return [res.status,await res.json(),res];};
+ try{let [status,body,res]=await request('/api/setup','POST',{username:'owner',password:'long-password'});cookie=res.headers.get('set-cookie').split(';')[0];const [,snapshot]=await request('/api/snapshot');const projectId=snapshot.projects[0].id;
+ [status,body]=await request('/api/tasks','POST',{projectId,title:'Sound effect',discipline:'audio',priority:'high',statusId:'backlog',conversationId:'attack'});assert.equal(status,201);const id=body.task.id;assert.equal(body.task.conversationId,undefined);
+ [status,body]=await request(`/api/tasks/${id}`,'PATCH',{description:'Click audio',statusId:'ready',acceptedBy:'attack'});assert.equal(status,200);assert.equal(body.task.statusId,'ready');assert.equal(body.task.acceptedBy,undefined);
+ assert.equal((await request(`/api/tasks/${id}`,'PATCH',{statusId:'done'}))[0],409);
+ assert.equal((await request(`/api/tasks/${id}`,'PATCH',{statusId:'missing'}))[0],400);
+ assert.equal((await request(`/api/tasks/${id}`))[1].task.description,'Click audio');
+ }finally{await application.close();await rm(dataDir,{recursive:true,force:true});}
+});
