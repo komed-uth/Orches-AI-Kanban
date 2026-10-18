@@ -4,7 +4,7 @@ This pilot is separate from the existing GitHub Pages dashboard. It runs one loc
 
 ## Install and start
 
-Requirements: Node.js **22.13 or newer** (built-in SQLite), npm, Git with worktree support, and a current Codex CLI supporting `codex app-server`. Install/authenticate Codex on the same host account that runs the server. Check `codex --version`, `codex login status`, and `git --version`; complete `codex login` if needed. CLI login status alone does not prove model connectivity. Allow the CLI to reach its configured model service.
+Supported pilot host: Linux. Process-group supervision uses POSIX signals; Windows is not supported by this implementation. Requirements: Node.js **22.13 or newer** (built-in SQLite), npm, Git with worktree support, and a current Codex CLI supporting `codex app-server`. Install/authenticate Codex on the same host account that runs the server. Check `codex --version`, `codex login status`, and `git --version`; complete `codex login` if needed. CLI login status alone does not prove model connectivity. Allow the CLI to reach its configured model service.
 
 From the repository root:
 
