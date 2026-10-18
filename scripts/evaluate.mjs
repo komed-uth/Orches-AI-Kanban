@@ -150,7 +150,9 @@ try {
         executable,
         deadlineMs: Number(value("--deadline-ms", "60000")),
         redact,
-        addSecret: (secret) => secretValues.push(secret),
+        addSecret: (secret) => {
+          if (secret) secretValues.push(secret);
+        },
       });
     } catch (error) {
       summary.outcome = "blocked";
