@@ -2,7 +2,7 @@ name: Application checks
 on:
   pull_request:
   push:
-    branches: [main, feat/self-hosted-orchestration]
+    branches: [main]
 permissions:
   contents: read
 jobs:
@@ -15,6 +15,7 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
+      - run: npm run format:check
       - run: npm test
       - run: npm run build
       - run: npx playwright install --with-deps chromium
