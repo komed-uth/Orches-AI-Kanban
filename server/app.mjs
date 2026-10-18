@@ -405,13 +405,11 @@ export async function createApplication({
       createdBy: req.user.id,
     };
     store.transaction((s) => s.invitations.push(invitation));
-    res
-      .status(201)
-      .json({
-        token: invitation.token,
-        expiresAt: invitation.expiresAt,
-        url: `/?invite=${invitation.token}`,
-      });
+    res.status(201).json({
+      token: invitation.token,
+      expiresAt: invitation.expiresAt,
+      url: `/?invite=${invitation.token}`,
+    });
   });
   app.patch("/api/settings", owner, (req, res) => {
     const settings = { ...store.state.settings };
@@ -665,7 +663,15 @@ export async function createApplication({
       for (const responses of streams.values())
         for (const res of responses) res.end();
       await Promise.all(
-        [...servers].map((s) => new Promise((r) => s.close(r))),
+        [...servers].map(
+          (server) =>
+            new Promise((resolve) => {
+              server.close(resolve);
+              // All task processes and event streams have stopped. Do not let
+              // browser keep-alive connections delay host restart indefinitely.
+              server.closeAllConnections();
+            }),
+        ),
       );
       store.close();
     },

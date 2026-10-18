@@ -361,7 +361,24 @@ test("host restart retains interrupted evidence and waits for an explicit retry"
   await expect(
     page.getByText("DETERMINISTIC TEST FIXTURE — no model execution."),
   ).toBeVisible();
+  const before = await (
+    await page.request.post("/__fixture/generation")
+  ).json();
   await page.request.post("/__fixture/restart");
+  await expect
+    .poll(
+      async () => {
+        try {
+          return (
+            await (await page.request.post("/__fixture/generation")).json()
+          ).generation;
+        } catch {
+          return before.generation;
+        }
+      },
+      { timeout: 15000 },
+    )
+    .toBe(before.generation + 1);
   await expect
     .poll(async () => {
       try {

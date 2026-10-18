@@ -81,8 +81,13 @@ function runnerFactory({
   };
 }
 let application;
+let generation = 0;
 async function boot() {
   application = await createApplication({ dataDir, runnerFactory });
+  generation += 1;
+  application.app.post("/__fixture/generation", (req, res) =>
+    res.json({ generation }),
+  );
   // Test-harness control only; this route is absent from the production application.
   application.app.post("/__fixture/restart", (req, res) => {
     res.json({ restarting: true });
