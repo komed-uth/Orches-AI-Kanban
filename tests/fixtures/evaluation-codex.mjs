@@ -20,7 +20,36 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
       method: "item/agentMessage/delta",
       params: { delta: "fixture output" },
     });
-    if (
+    if (process.env.EVALUATION_FIXTURE === "json-secrets")
+      send({
+        method: "item/agentMessage/delta",
+        params: {
+          delta:
+            JSON.stringify({
+              Authorization: "Bearer json-bearer-secret",
+              Cookie: "json-cookie-secret",
+              orches_session: "json-session-secret",
+            }) +
+            "\n" +
+            JSON.stringify(
+              JSON.stringify({ Authorization: "Bearer escaped-header-secret" }),
+            ),
+        },
+      });
+    if (process.env.EVALUATION_FIXTURE === "connected-timeout")
+      send({
+        method: "item/agentMessage/delta",
+        params: { delta: "Successfully connected; awaiting model output." },
+      });
+    if (process.env.EVALUATION_FIXTURE === "retry-blocked")
+      send({
+        method: "error",
+        params: {
+          error: { message: "proxy HTTP CONNECT 403 forbidden" },
+          willRetry: true,
+        },
+      });
+    else if (
       process.env.EVALUATION_FIXTURE === "blocked" ||
       (process.env.EVALUATION_FIXTURE === "mixed" &&
         m.params.input[0].text.includes("Show the remaining gem count"))
@@ -32,7 +61,9 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
           willRetry: false,
         },
       });
-    else if (process.env.EVALUATION_FIXTURE !== "timeout")
+    else if (
+      !["timeout", "connected-timeout"].includes(process.env.EVALUATION_FIXTURE)
+    )
       setTimeout(() => {
         if (process.env.EVALUATION_FIXTURE === "noisy")
           for (let i = 0; i < 160; i++)

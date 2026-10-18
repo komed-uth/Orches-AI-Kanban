@@ -21,6 +21,12 @@ async function fixture(t, mode = "success") {
   const output = join(root, "evidence");
   const runtime = join(root, "runtime");
   async function run(args = [], env = {}) {
+    const childEnv = {
+      ...process.env,
+      CODEX_HOME: join(root, "codex-home"),
+      ...env,
+    };
+    delete childEnv.NODE_TEST_CONTEXT;
     try {
       return {
         code: 0,
@@ -37,11 +43,7 @@ async function fixture(t, mode = "success") {
             ...args,
           ],
           {
-            env: {
-              ...process.env,
-              CODEX_HOME: join(root, "codex-home"),
-              ...env,
-            },
+            env: childEnv,
             timeout: 15000,
           },
         )),
@@ -139,6 +141,12 @@ test("explicit synthetic live execution uses both seeded tasks and retains attri
     .map(JSON.parse);
   assert.equal(new Set(events.map((e) => e.id)).size, events.length);
   assert.ok(events.every((e) => e.mode === "synthetic-fixture" && e.taskId));
+  const verificationOutput = events.map((e) => e.text ?? "").join("");
+  assert.match(
+    verificationOutput,
+    /player sees score updates and a winning result/,
+  );
+  assert.doesNotMatch(verificationOutput, /called recursively/);
   for (const run of s.runs) assert.ok(events.some((e) => e.runId === run.id));
 });
 for (const mode of ["blocked", "mixed", "timeout", "noisy"])
@@ -231,6 +239,7 @@ test("termination retains interrupted work and a second live command cannot inte
     ORCHES_EVAL_PASSWORD: "test-password-123",
     EVALUATION_FIXTURE: "timeout",
   };
+  delete env.NODE_TEST_CONTEXT;
   const child = spawn(
     process.execPath,
     [
@@ -292,4 +301,180 @@ test("termination retains interrupted work and a second live command cannot inte
     assert.ok(run.branch);
   }
   assert.ok(Buffer.byteLength(stdout) < 4096);
+});
+test("live evidence redacts quoted and escaped JSON authentication fields absent from environment", async (t) => {
+  const f = await fixture(t);
+  await f.run(
+    [
+      "--live",
+      "--fixture",
+      "--executable",
+      resolve("tests/fixtures/evaluation-codex.mjs"),
+      "--deadline-ms",
+      "5000",
+    ],
+    {
+      ORCHES_EVAL_USERNAME: "evaluator",
+      ORCHES_EVAL_PASSWORD: "test-password-123",
+      EVALUATION_FIXTURE: "json-secrets",
+    },
+  );
+  const events = await readFile(join(f.output, "events.ndjson"), "utf8");
+  assert.doesNotMatch(
+    events,
+    /json-bearer-secret|json-cookie-secret|json-session-secret|escaped-header-secret/,
+  );
+  assert.match(events, /REDACTED/);
+  assert.equal((await f.summary()).outcome, "awaiting-human-review");
+});
+for (const mode of ["retry-blocked", "connected-timeout"])
+  test(`${mode} retains accurate per-run connectivity after deadline cleanup`, async (t) => {
+    const f = await fixture(t);
+    await f.run(
+      [
+        "--live",
+        "--fixture",
+        "--executable",
+        resolve("tests/fixtures/evaluation-codex.mjs"),
+        "--deadline-ms",
+        "1500",
+      ],
+      {
+        ORCHES_EVAL_USERNAME: "evaluator",
+        ORCHES_EVAL_PASSWORD: "test-password-123",
+        EVALUATION_FIXTURE: mode,
+      },
+    );
+    const s = await f.summary();
+    assert.equal(s.termination, "deadline");
+    assert.equal(s.phases.initialization, "verified");
+    assert.equal(
+      s.phases.connectivity,
+      mode === "retry-blocked" ? "blocked" : "unverified",
+    );
+    assert.equal(
+      s.outcome,
+      mode === "retry-blocked" ? "blocked" : "incomplete",
+    );
+    for (const run of s.runs) {
+      assert.equal(
+        run.connectivity,
+        mode === "retry-blocked" ? "blocked" : "unverified",
+      );
+      if (mode === "retry-blocked")
+        assert.match(run.connectivityBlocker, /CONNECT 403/);
+    }
+  });
+for (const mode of ["deadline", "SIGTERM"])
+  test(`${mode} exports final cancellation and Git evidence through the cleanup cursor`, async (t) => {
+    const f = await fixture(t);
+    const env = {
+      ...process.env,
+      CODEX_HOME: join(f.root, "codex-home"),
+      ORCHES_EVAL_USERNAME: "evaluator",
+      ORCHES_EVAL_PASSWORD: "test-password-123",
+      EVALUATION_FIXTURE: "timeout",
+    };
+    delete env.NODE_TEST_CONTEXT;
+    const child = spawn(
+      process.execPath,
+      [
+        command,
+        "--live",
+        "--fixture",
+        "--data-dir",
+        f.runtime,
+        "--output",
+        f.output,
+        "--executable",
+        resolve("tests/fixtures/evaluation-codex.mjs"),
+        "--deadline-ms",
+        mode === "deadline" ? "1500" : "10000",
+      ],
+      { env, stdio: ["ignore", "pipe", "pipe"] },
+    );
+    t.after(() => child.kill("SIGKILL"));
+    child.stdout.resume();
+    child.stderr.resume();
+    const exited = once(child, "exit");
+    if (mode === "SIGTERM") {
+      let started = false;
+      for (let i = 0; i < 150; i++) {
+        const events = await readFile(
+          join(f.output, "events.ndjson"),
+          "utf8",
+        ).catch(() => "");
+        if (events.split("fixture output").length === 3) {
+          started = true;
+          break;
+        }
+        await delay(20);
+      }
+      assert.ok(started);
+      child.kill("SIGTERM");
+    }
+    assert.equal((await exited)[0], 2);
+    const s = await f.summary();
+    const events = (await readFile(join(f.output, "events.ndjson"), "utf8"))
+      .trim()
+      .split("\n")
+      .map(JSON.parse);
+    assert.equal(s.evidence.missing, false);
+    assert.equal(s.evidence.lastCursor, s.evidence.cleanupCursor);
+    for (const run of s.runs) {
+      assert.ok(
+        events.some(
+          (e) =>
+            e.runId === run.id &&
+            e.type === "run.updated" &&
+            ["cancelled", "interrupted"].includes(e.state),
+        ),
+        run.id,
+      );
+      assert.ok(
+        events.some((e) => e.runId === run.id && e.type === "run.evidence"),
+        run.id,
+      );
+    }
+  });
+test("diagnostics block missing Git even when the selected Codex executable and runtime are ready", async (t) => {
+  const f = await fixture(t);
+  const original = await readFile(f.cli, "utf8");
+  await writeFile(
+    f.cli,
+    original.replace("#!/usr/bin/env node", "#!" + process.execPath),
+    { mode: 0o755 },
+  );
+  const result = await f.run([], { PATH: f.root });
+  assert.equal(result.code, 2);
+  const s = await f.summary();
+  assert.equal(s.host.installed, true);
+  assert.equal(s.host.loggedIn, true);
+  assert.equal(s.host.gitWorktreeSupported, false);
+  assert.equal(s.outcome, "blocked");
+  assert.match(s.blocker, /Git.*PATH/);
+  assert.equal(s.phases.connectivity, "unverified");
+});
+test("reusing an evidence output directory preserves the prior summary and events byte-for-byte", async (t) => {
+  const f = await fixture(t);
+  const args = [
+    "--live",
+    "--fixture",
+    "--executable",
+    resolve("tests/fixtures/evaluation-codex.mjs"),
+    "--deadline-ms",
+    "5000",
+  ];
+  const env = {
+    ORCHES_EVAL_USERNAME: "evaluator",
+    ORCHES_EVAL_PASSWORD: "test-password-123",
+  };
+  await f.run(args, env);
+  const summary = await readFile(join(f.output, "summary.json"), "utf8");
+  const events = await readFile(join(f.output, "events.ndjson"), "utf8");
+  const again = await f.run(args, env);
+  assert.equal(again.code, 2);
+  assert.match(JSON.parse(again.stdout).blocker, /new.*--output/);
+  assert.equal(await readFile(join(f.output, "summary.json"), "utf8"), summary);
+  assert.equal(await readFile(join(f.output, "events.ndjson"), "utf8"), events);
 });
