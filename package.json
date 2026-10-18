@@ -10,7 +10,9 @@
     "build": "vite build",
     "dev": "npm run build && node --watch server/index.mjs",
     "start": "node server/index.mjs",
-    "test:browser": "playwright test"
+    "test:browser": "playwright test",
+    "format": "prettier --write \"{server,client,sample-game,scripts,tests}/**/*.{mjs,js,jsx,json,css,html}\" \"{*.mjs,package.json,.github/workflows/test.yml}\"",
+    "format:check": "prettier --check \"{server,client,sample-game,scripts,tests}/**/*.{mjs,js,jsx,json,css,html}\" \"{*.mjs,package.json,.github/workflows/test.yml}\""
   },
   "dependencies": {
     "express": "^5.1.0",
@@ -19,6 +21,7 @@
     "vite": "^6.3.0"
   },
   "devDependencies": {
-    "@playwright/test": "^1.64.1"
+    "@playwright/test": "^1.64.1",
+    "prettier": "3.8.5"
   }
 }
