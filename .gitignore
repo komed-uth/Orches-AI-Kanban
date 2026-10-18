@@ -1,1 +1,6 @@
-docs/issues.json
+node_modules/
+dist/
+.orches-data/
+.env
+playwright-report/
+test-results/
