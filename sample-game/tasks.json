@@ -1,0 +1,18 @@
+[
+  {
+    "title": "Show the remaining gem count",
+    "description": "Improve renderer.mjs statusText so the player sees how many gems remain during play. Keep this task independent of controls.mjs and game rules.",
+    "acceptanceCriteria": "During play the status includes Remaining gems: N, initially 5 and then 4 after one collection. Winning status still clearly says You won! and Score: 5 and includes Remaining gems: 0. Add tests in tests/renderer.test.mjs covering these states. Existing tests pass. Change only renderer.mjs and tests/renderer.test.mjs.",
+    "discipline": "programming",
+    "priority": "medium",
+    "statusId": "backlog"
+  },
+  {
+    "title": "Restart the game with the R key",
+    "description": "Improve controls.mjs handleKey to call the supplied onRestart callback when the player presses r or R. app.mjs already provides this callback. Keep this task independent of renderer.mjs and game rules.",
+    "acceptanceCriteria": "Pressing r or R invokes onRestart exactly once, prevents browser default handling, and returns true. Other keys retain existing behavior. Add tests in tests/controls.test.mjs for both restart keys and unchanged movement. Existing tests pass. Change only controls.mjs and tests/controls.test.mjs.",
+    "discipline": "programming",
+    "priority": "medium",
+    "statusId": "backlog"
+  }
+]
