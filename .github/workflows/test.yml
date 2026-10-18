@@ -17,6 +17,7 @@ jobs:
       - run: npm ci
       - run: npm run format:check
       - id: tests
+        shell: bash
         run: npm test 2>&1 | tee "$RUNNER_TEMP/contributor-tests.log"
       - name: Expose contributor failure diagnostics
         if: failure() && steps.tests.outcome == 'failure'
