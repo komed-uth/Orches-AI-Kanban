@@ -129,7 +129,15 @@ repeated historical snapshots. The export is capped at **1 MiB total**, reservin
 under 4 KiB. Oversized/missing events and exhausted storage are recorded explicitly,
 including affected runs when identifiable, and make evidence incomplete. The
 adapter retains its separate 64 KiB diagnostic cap per run. Exported text redacts
-authentication headers, session cookies, and configured secret values. The retained
+authentication headers, session cookies, and configured secret values. Output deltas
+are buffered by run and item (or the run's unclassified stream) until a complete
+line can be sanitized; ordered event metadata is written immediately. A completed
+line is attached to its completing event with `textFromCursor` identifying its
+first source event. At most 64 streams and 8,192 characters per pending line are
+retained. Oversized lines are omitted through their newline; exceeding the stream
+limit suppresses further text for that run. Unterminated tails flush on normal
+completion, while interrupted or abruptly ended streams omit their tails. These
+omissions mark affected evidence incomplete. The retained
 runtime database and working copies are operational state, not part of that bounded
 export; keep them private rather than sharing them as evidence.
 

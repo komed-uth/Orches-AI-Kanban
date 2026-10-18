@@ -18,8 +18,103 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
     send({ id: m.id, result: { turn: { id: "turn" } } });
     send({
       method: "item/agentMessage/delta",
-      params: { delta: "fixture output" },
+      params: { delta: "fixture output\n" },
     });
+    if (process.env.EVALUATION_FIXTURE === "stream-limit") {
+      const first = m.params.input[0].text.includes(
+        "Show the remaining gem count",
+      );
+      setTimeout(
+        () => {
+          for (let index = 0; index < (first ? 60 : 3); index++)
+            send({
+              method: "item/agentMessage/delta",
+              params: {
+                delta: "Cookie: session=stream-limit-secret",
+                itemId: `stream-${index}`,
+              },
+            });
+        },
+        first ? 0 : 50,
+      );
+      if (!first)
+        setTimeout(
+          () =>
+            send({
+              method: "item/agentMessage/delta",
+              params: {
+                delta: "stream-limit-continuation\n",
+                itemId: "stream-2",
+              },
+            }),
+          800,
+        );
+      setTimeout(
+        () =>
+          send({
+            method: "turn/completed",
+            params: { turn: { id: "turn", status: "completed" } },
+          }),
+        first ? 150 : 1000,
+      );
+      continue;
+    }
+    if (process.env.EVALUATION_FIXTURE === "split-secrets") {
+      const marker = m.params.input[0].text.includes(
+        "Show the remaining gem count",
+      )
+        ? "gem"
+        : "restart";
+      const chunks = [
+        `\n${marker}-before\nCoo`,
+        "kie: session=",
+        "split-cookie-secret\nconfigured-cross-",
+        "fragment-secret\nmulti-line-head\nmulti-",
+        "line-tail\n",
+        `${marker}-after\nAuthorization: Bearer terminal-secret`,
+      ];
+      setTimeout(
+        () =>
+          send({
+            method: "item/agentMessage/delta",
+            params: {
+              delta: `${marker}-independent\n`,
+              itemId: `${marker}-parallel`,
+            },
+          }),
+        10,
+      );
+      chunks.forEach((delta, index) =>
+        setTimeout(
+          () =>
+            send({
+              method: "item/agentMessage/delta",
+              params: { delta, itemId: `${marker}-message` },
+            }),
+          index * 20,
+        ),
+      );
+    }
+    if (process.env.EVALUATION_FIXTURE === "bounded-text") {
+      for (const delta of [
+        "Cookie: session=" + "x".repeat(10000) + "oversized-secret",
+        "oversized-continuation-secret\nretained-after-oversize\nCookie: session=cancel-tail-secret",
+      ])
+        send({
+          method: "item/agentMessage/delta",
+          params: { delta, itemId: "bounded-message" },
+        });
+    }
+    if (process.env.EVALUATION_FIXTURE === "split-proxy") {
+      for (const [index, delta] of [
+        "proxy HTTP CON",
+        "NECT 403 forbidden\n",
+      ].entries())
+        setTimeout(
+          () => send({ method: "item/agentMessage/delta", params: { delta } }),
+          index * 10,
+        );
+    }
     if (process.env.EVALUATION_FIXTURE === "json-secrets")
       send({
         method: "item/agentMessage/delta",
@@ -64,7 +159,9 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
         },
       });
     else if (
-      !["timeout", "connected-timeout"].includes(process.env.EVALUATION_FIXTURE)
+      !["timeout", "connected-timeout", "bounded-text", "split-proxy"].includes(
+        process.env.EVALUATION_FIXTURE,
+      )
     )
       setTimeout(() => {
         if (process.env.EVALUATION_FIXTURE === "noisy")
@@ -74,7 +171,7 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
               params: {
                 delta:
                   `event-${i} Authorization: Bearer synthetic-secret\n` +
-                  "x".repeat(10000),
+                  ("x".repeat(100) + "\n").repeat(100),
               },
             });
         send({

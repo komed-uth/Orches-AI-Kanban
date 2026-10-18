@@ -22,7 +22,8 @@ const secretValues = Object.entries(process.env)
     ([key, val]) =>
       val && /password|secret|token|cookie|authorization|api.?key/i.test(key),
   )
-  .map(([, val]) => val);
+  // Line-oriented export must also protect each line of multiline credentials.
+  .flatMap(([, val]) => [val, ...val.split(/[\r\n]+/).filter(Boolean)]);
 const redact = (value) =>
   secretValues
     .reduce(

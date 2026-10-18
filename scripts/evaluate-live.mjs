@@ -5,6 +5,8 @@ import { createApplication } from "../server/app.mjs";
 
 export const policy = {
   eventBytes: 8192,
+  lineCharacters: 8192,
+  outputStreams: 64,
   artifactBytes: 1048576,
   summaryBytes: 65536,
   consoleBytes: 4096,
@@ -66,6 +68,8 @@ export async function evaluateLive({
     collectionClosing = false;
   const baselineRuns = new Set();
   const requestedTasks = new Set();
+  const outputBuffers = new Map();
+  const suppressedRuns = new Set();
   const states = new Map();
   const connectivityBlockers = new Map();
   const connectivityRejected = (text = "") =>
@@ -109,6 +113,73 @@ export async function evaluateLive({
       );
     return data;
   };
+  const loseText = (event, safe, reason) => {
+    safe.textOmitted = reason;
+    summary.evidence.missing = true;
+    if (event.runId && !summary.evidence.affectedRuns.includes(event.runId))
+      summary.evidence.affectedRuns.push(event.runId);
+  };
+  const attachText = (event, safe, text, fromCursor) => {
+    if (connectivityRejected(text))
+      connectivityBlockers.set(event.runId, redact(text).slice(0, 512));
+    safe.text = (safe.text ?? "") + redact(text);
+    safe.textFromCursor = Math.min(
+      safe.textFromCursor ?? fromCursor,
+      fromCursor,
+    );
+  };
+  const collectText = (event, safe) => {
+    if (suppressedRuns.has(event.runId)) {
+      loseText(event, safe, "Output omitted after stream limit exceeded");
+      return;
+    }
+    const key = JSON.stringify([event.runId, event.itemId ?? null]);
+    let buffer = outputBuffers.get(key);
+    if (!buffer) {
+      if (outputBuffers.size >= policy.outputStreams) {
+        suppressedRuns.add(event.runId);
+        for (const [key, pending] of outputBuffers)
+          if (pending.runId === event.runId) outputBuffers.delete(key);
+        loseText(event, safe, "Output stream limit exceeded");
+        return;
+      }
+      buffer = {
+        runId: event.runId,
+        taskId: event.taskId,
+        pending: "",
+        dropping: false,
+        fromCursor: event.id,
+      };
+      outputBuffers.set(key, buffer);
+    }
+    let offset = 0;
+    while (offset < event.text.length) {
+      const end = event.text.indexOf("\n", offset);
+      const through = end < 0 ? event.text.length : end + 1;
+      const part = event.text.slice(offset, through);
+      if (!buffer.dropping) {
+        if (!buffer.pending) buffer.fromCursor = event.id;
+        if (buffer.pending.length + part.length > policy.lineCharacters) {
+          buffer.pending = "";
+          buffer.dropping = true;
+          summary.evidence.truncatedEvents++;
+          loseText(
+            event,
+            safe,
+            "Oversized output line omitted through newline",
+          );
+        } else buffer.pending += part;
+      }
+      if (end >= 0) {
+        if (!buffer.dropping)
+          attachText(event, safe, buffer.pending, buffer.fromCursor);
+        buffer.pending = "";
+        buffer.dropping = false;
+      }
+      offset = through;
+    }
+    if (buffer.pending || buffer.dropping) safe.textPending = true;
+  };
   const record = (event) => {
     if (event.id <= summary.evidence.lastCursor) return;
     summary.evidence.lastCursor = event.id;
@@ -118,7 +189,11 @@ export async function evaluateLive({
       [...states.values()].filter((s) =>
         ["starting", "running", "waiting", "verifying"].includes(s),
       ).length >= 2;
-    if (event.runId && connectivityRejected(event.text))
+    if (
+      event.type !== "run.output" &&
+      event.runId &&
+      connectivityRejected(event.text)
+    )
       connectivityBlockers.set(event.runId, redact(event.text).slice(0, 512));
     const safe = {
       mode: summary.mode,
@@ -129,7 +204,33 @@ export async function evaluateLive({
       runId: event.runId,
       state: event.state,
     };
-    if (event.text) safe.text = redact(event.text);
+    if (event.text) {
+      if (event.type === "run.output") collectText(event, safe);
+      else safe.text = redact(event.text);
+    }
+    if (
+      ["completed", "failed", "cancelled", "interrupted"].includes(event.state)
+    )
+      for (const [key, buffer] of outputBuffers) {
+        if (buffer.runId !== event.runId) continue;
+        if (buffer.pending) {
+          if (["completed", "failed"].includes(event.state))
+            attachText(event, safe, buffer.pending, buffer.fromCursor);
+          else {
+            if (connectivityRejected(buffer.pending))
+              connectivityBlockers.set(
+                event.runId,
+                "Proxy HTTP CONNECT 403 rejection in interrupted output; inspect retained runtime.",
+              );
+            loseText(
+              event,
+              safe,
+              "Unterminated output omitted after interruption",
+            );
+          }
+        }
+        outputBuffers.delete(key);
+      }
     if (event.verification)
       safe.verification = { success: event.verification.success };
     if (event.type === "run.evidence")
@@ -391,10 +492,29 @@ export async function evaluateLive({
     eventController.abort();
     await stream?.cancel().catch(() => {});
     await streamTask;
+    // A stream can end before a terminal event. Never publish its unresolved tail.
+    for (const buffer of outputBuffers.values())
+      if (buffer.pending || buffer.dropping)
+        loseText(
+          buffer,
+          {},
+          "Unterminated output omitted at end of collection",
+        );
+    outputBuffers.clear();
     clearTimeout(timer);
     process.off("SIGTERM", term);
     process.off("SIGINT", int);
   }
+  // The final stream drain can reveal a blocker after the last HTTP refresh.
+  for (const run of summary.runs)
+    if (
+      connectivityBlockers.has(run.id) &&
+      !run.verification &&
+      !["verifying", "completed"].includes(run.state)
+    ) {
+      run.connectivity = "blocked";
+      run.connectivityBlocker = connectivityBlockers.get(run.id);
+    }
   if (interrupted) summary.termination = interrupted;
   const complete =
     summary.runs.length === 2 &&
