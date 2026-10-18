@@ -1,5 +1,7 @@
 # Orches-AI-Kanban
 
+The self-hosted game development orchestration pilot is documented in [PILOT.md](PILOT.md). It runs locally with team accounts, isolated Codex task agents, verification, and human review. The independent GitHub Pages dashboard below remains available.
+
 A Kanban dashboard hosted on GitHub Pages, with GitHub Issues as the task database. No local server, database, npm install, or browser token is needed.
 
 ## Deploy
