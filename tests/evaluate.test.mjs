@@ -767,3 +767,37 @@ test("an event-stream EOF omits buffered secret tails and reports incomplete evi
   for (const run of summary.runs)
     assert.ok(["cancelled", "interrupted"].includes(run.state));
 });
+
+test("an interrupted proxy rejection does not fabricate an HTTP status or expose its tail", async (t) => {
+  const f = await fixture(t);
+  await f.run(
+    [
+      "--live",
+      "--fixture",
+      "--executable",
+      resolve("tests/fixtures/evaluation-codex.mjs"),
+      "--deadline-ms",
+      "1500",
+    ],
+    {
+      ORCHES_EVAL_USERNAME: "evaluator",
+      ORCHES_EVAL_PASSWORD: "test-password-123",
+      EVALUATION_FIXTURE: "interrupted-proxy",
+    },
+  );
+  const summary = await f.summary();
+  assert.equal(summary.termination, "deadline");
+  assert.equal(summary.outcome, "blocked");
+  assert.equal(summary.phases.connectivity, "blocked");
+  const exported =
+    (await readFile(join(f.output, "summary.json"), "utf8")) +
+    (await readFile(join(f.output, "events.ndjson"), "utf8"));
+  assert.doesNotMatch(exported, /HTTP (?:CONNECT )?403|private-proxy-tail/);
+  for (const run of summary.runs) {
+    assert.equal(run.connectivity, "blocked");
+    assert.equal(
+      run.connectivityBlocker,
+      "Proxy connection rejected in interrupted output; inspect retained runtime.",
+    );
+  }
+});

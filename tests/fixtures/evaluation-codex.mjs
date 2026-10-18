@@ -105,6 +105,11 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
           params: { delta, itemId: "bounded-message" },
         });
     }
+    if (process.env.EVALUATION_FIXTURE === "interrupted-proxy")
+      send({
+        method: "item/agentMessage/delta",
+        params: { delta: "proxy HTTP CONNECT 407 denied; private-proxy-tail" },
+      });
     if (process.env.EVALUATION_FIXTURE === "split-proxy") {
       for (const [index, delta] of [
         "proxy HTTP CON",
@@ -159,9 +164,13 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
         },
       });
     else if (
-      !["timeout", "connected-timeout", "bounded-text", "split-proxy"].includes(
-        process.env.EVALUATION_FIXTURE,
-      )
+      ![
+        "timeout",
+        "connected-timeout",
+        "bounded-text",
+        "split-proxy",
+        "interrupted-proxy",
+      ].includes(process.env.EVALUATION_FIXTURE)
     )
       setTimeout(() => {
         if (process.env.EVALUATION_FIXTURE === "noisy")

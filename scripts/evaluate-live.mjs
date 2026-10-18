@@ -220,7 +220,7 @@ export async function evaluateLive({
             if (connectivityRejected(buffer.pending))
               connectivityBlockers.set(
                 event.runId,
-                "Proxy HTTP CONNECT 403 rejection in interrupted output; inspect retained runtime.",
+                "Proxy connection rejected in interrupted output; inspect retained runtime.",
               );
             loseText(
               event,
