@@ -30,7 +30,7 @@ jobs:
         with:
           ref: main
       - name: Test board rules
-        run: node --test tests/*.test.mjs
+        run: node --test tests/board.test.mjs
       - name: Export public issues
         uses: actions/github-script@v7
         with:

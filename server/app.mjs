@@ -1,0 +1,691 @@
+import express from "express";
+import {
+  randomBytes,
+  randomUUID,
+  scryptSync,
+  timingSafeEqual,
+} from "node:crypto";
+import { existsSync } from "node:fs";
+import { resolve, join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+import { execFileSync } from "node:child_process";
+import { createStore } from "./store.mjs";
+import { seedSampleProject } from "./sample.mjs";
+import { inspectCodexHost } from "./codex.mjs";
+import { createScheduler } from "./scheduler.mjs";
+
+const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+export const defaultStatuses = () =>
+  ["Backlog", "Ready", "In Progress", "Review", "Done", "Blocked"].map(
+    (name, i) => ({
+      id: ["backlog", "ready", "progress", "review", "done", "blocked"][i],
+      name,
+      kind: ["backlog", "ready", "execution", "review", "done", "blocked"][i],
+    }),
+  );
+const fail = (status, message) => {
+  throw Object.assign(new Error(message), { status });
+};
+const publicUser = ({ id, username, role }) => ({ id, username, role });
+const passwordHash = (password) => {
+  const salt = randomBytes(16).toString("hex");
+  return `${salt}:${scryptSync(password, salt, 64).toString("hex")}`;
+};
+const validPassword = (password, hash) => {
+  const [salt, digest] = hash.split(":");
+  return timingSafeEqual(
+    Buffer.from(digest, "hex"),
+    scryptSync(password, salt, 64),
+  );
+};
+const credentials = (body) => {
+  if (
+    typeof body.username !== "string" ||
+    !/^[\w.-]{2,40}$/.test(body.username) ||
+    typeof body.password !== "string" ||
+    body.password.length < 10 ||
+    body.password.length > 256
+  )
+    fail(
+      400,
+      "Use a 2–40 character username and password of at least 10 characters.",
+    );
+};
+function projectDefaults(record) {
+  return {
+    ...record,
+    statuses: defaultStatuses(),
+    rule: {
+      enabled: false,
+      triggerStatus: "ready",
+      reviewStatus: "review",
+      instructions: "",
+      buildCommand: null,
+      testCommand: null,
+      commandInheritanceVersion: 1,
+    },
+  };
+}
+async function seed(store, dataDir) {
+  if (store.state.projects.length) return;
+  const { tasks, ...configuration } = await seedSampleProject(dataDir);
+  store.transaction((state) => {
+    const project = projectDefaults({ id: randomUUID(), ...configuration });
+    state.projects.push(project);
+    for (const definition of tasks)
+      state.tasks.push({
+        id: randomUUID(),
+        projectId: project.id,
+        description: "",
+        acceptanceCriteria: "",
+        discipline: "programming",
+        priority: "medium",
+        assigneeId: null,
+        ...definition,
+        statusId: "backlog",
+        messages: [],
+      });
+  });
+}
+export async function createApplication({
+  dataDir = resolve(".orches-data"),
+  runnerFactory,
+  schedulerFactory,
+} = {}) {
+  const store = createStore(dataDir);
+  await seed(store, dataDir);
+  // Older records copied project defaults into rules without recording intent.
+  // Preserve distinct overrides and migrate matching copies to inheritance once.
+  store.transaction(() => {
+    for (const project of store.state.projects) {
+      if (project.rule.commandInheritanceVersion) continue;
+      for (const field of ["buildCommand", "testCommand"])
+        if (project.rule[field] === project[field]) project.rule[field] = null;
+      project.rule.commandInheritanceVersion = 1;
+    }
+  });
+  const scheduler = await (schedulerFactory ?? createScheduler)({
+    store,
+    dataDir,
+    runnerFactory,
+  });
+  const app = express();
+  app.disable("x-powered-by");
+  app.use(express.json({ limit: "1mb" }));
+  app.use((req, res, next) => {
+    req.body ??= {};
+    next();
+  });
+  const streams = new Map();
+  const servers = new Set();
+  const originalListen = app.listen.bind(app);
+  app.listen = (...args) => {
+    const server = originalListen(...args);
+    servers.add(server);
+    server.on("close", () => servers.delete(server));
+    return server;
+  };
+  const sessionOf = (req) => {
+    const token = (req.headers.cookie ?? "")
+      .split(";")
+      .map((x) => x.trim())
+      .find((x) => x.startsWith("orches_session="))
+      ?.slice(15);
+    return store.state.sessions.find(
+      (x) => x.token === token && x.expiresAt > Date.now(),
+    );
+  };
+  const signedIn = (req, res, next) => {
+    const session = sessionOf(req);
+    const user = store.state.users.find((x) => x.id === session?.userId);
+    if (!user) return res.status(401).json({ error: "Sign in required." });
+    req.user = user;
+    req.session = session;
+    next();
+  };
+  const owner = (req, res, next) =>
+    req.user.role === "owner"
+      ? next()
+      : res.status(403).json({ error: "Owner access required." });
+  const signIn = (user, res) => {
+    const session = {
+      token: randomBytes(32).toString("hex"),
+      userId: user.id,
+      expiresAt: Date.now() + 7 * 86400000,
+    };
+    store.transaction((s) => s.sessions.push(session));
+    res.cookie("orches_session", session.token, {
+      httpOnly: true,
+      sameSite: "strict",
+      maxAge: 7 * 86400000,
+      path: "/",
+    });
+  };
+  app.get("/api/setup", (req, res) =>
+    res.json({ needsSetup: store.state.users.length === 0 }),
+  );
+  app.post("/api/setup", (req, res) => {
+    credentials(req.body);
+    if (store.state.users.length) fail(409, "Owner has already been created.");
+    const user = {
+      id: randomUUID(),
+      username: req.body.username,
+      passwordHash: passwordHash(req.body.password),
+      role: "owner",
+    };
+    store.transaction((s) => s.users.push(user));
+    signIn(user, res);
+    res.status(201).json({ user: publicUser(user) });
+  });
+  app.post("/api/login", (req, res) => {
+    credentials(req.body);
+    const user = store.state.users.find(
+      (x) => x.username === req.body.username,
+    );
+    if (!user || !validPassword(req.body.password, user.passwordHash))
+      fail(401, "Invalid username or password.");
+    signIn(user, res);
+    res.json({ user: publicUser(user) });
+  });
+  app.post("/api/logout", signedIn, (req, res) => {
+    store.transaction((s) => {
+      s.sessions = s.sessions.filter((x) => x.token !== req.session.token);
+    });
+    for (const response of streams.get(req.session.token) ?? []) response.end();
+    streams.delete(req.session.token);
+    res.clearCookie("orches_session", { path: "/" });
+    res.json({ ok: true });
+  });
+  app.post("/api/join", (req, res) => {
+    credentials(req.body);
+    const invitation = store.state.invitations.find(
+      (x) => x.token === req.body.token,
+    );
+    if (!invitation || invitation.usedAt || invitation.expiresAt <= Date.now())
+      fail(409, "Invitation is invalid, expired, or already used.");
+    if (store.state.users.some((x) => x.username === req.body.username))
+      fail(409, "Username is already in use.");
+    const user = {
+      id: randomUUID(),
+      username: req.body.username,
+      passwordHash: passwordHash(req.body.password),
+      role: "member",
+    };
+    store.transaction((s) => {
+      invitation.usedAt = Date.now();
+      s.users.push(user);
+      store.event("team.updated", { userId: user.id });
+    });
+    signIn(user, res);
+    res.status(201).json({ user: publicUser(user) });
+  });
+  app.use("/api", signedIn);
+  app.get("/api/me", (req, res) => res.json({ user: publicUser(req.user) }));
+  app.get("/api/snapshot", (req, res) => {
+    const { projects, tasks, runs, settings, events } = store.state;
+    res.json({
+      user: publicUser(req.user),
+      users: store.state.users.map(publicUser),
+      projects,
+      tasks,
+      runs,
+      settings,
+      events,
+      cursor: events.at(-1)?.id ?? 0,
+    });
+  });
+  app.get("/api/events", (req, res) => {
+    const after = Number(req.headers["last-event-id"] ?? req.query.after ?? 0);
+    if (!Number.isSafeInteger(after) || after < 0)
+      fail(400, "Invalid event cursor.");
+    res.set({
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      Connection: "keep-alive",
+    });
+    res.flushHeaders();
+    const send = (event) =>
+      res.write(`id: ${event.id}\ndata: ${JSON.stringify(event)}\n\n`);
+    const unsubscribe = store.subscribe(send);
+    for (const event of store.state.events) if (event.id > after) send(event);
+    const token = req.session.token;
+    if (!streams.has(token)) streams.set(token, new Set());
+    streams.get(token).add(res);
+    const heartbeat = setInterval(() => {
+      if (!sessionOf(req)) res.end();
+      else res.write(": heartbeat\n\n");
+    }, 15000);
+    req.on("close", () => {
+      clearInterval(heartbeat);
+      unsubscribe();
+      streams.get(token)?.delete(res);
+    });
+  });
+  app.get("/api/projects", (req, res) =>
+    res.json({ projects: store.state.projects }),
+  );
+  app.get("/api/tasks/:id", (req, res) => {
+    const task = store.state.tasks.find((x) => x.id === req.params.id);
+    if (!task) fail(404, "Task not found.");
+    res.json({
+      task,
+      runs: store.state.runs.filter((x) => x.taskId === task.id),
+    });
+  });
+  const findProject = (id) => {
+    const project = store.state.projects.find((x) => x.id === id);
+    if (!project) fail(404, "Project not found.");
+    return project;
+  };
+  const findTask = (id) => {
+    const task = store.state.tasks.find((x) => x.id === id);
+    if (!task) fail(404, "Task not found.");
+    return task;
+  };
+  const validFields = (body, project) => {
+    const fields = {};
+    for (const key of [
+      "title",
+      "description",
+      "acceptanceCriteria",
+      "discipline",
+      "priority",
+      "assigneeId",
+    ])
+      if (Object.hasOwn(body, key)) fields[key] = body[key];
+    for (const key of ["title", "description", "acceptanceCriteria"])
+      if (
+        Object.hasOwn(fields, key) &&
+        (typeof fields[key] !== "string" || fields[key].length > 50000)
+      )
+        fail(400, `Invalid ${key}.`);
+    if (Object.hasOwn(fields, "title") && !fields.title.trim())
+      fail(400, "Task title is required.");
+    if (
+      Object.hasOwn(fields, "discipline") &&
+      !["programming", "qa", "design", "art", "animation", "audio"].includes(
+        fields.discipline,
+      )
+    )
+      fail(400, "Unknown discipline.");
+    if (
+      Object.hasOwn(fields, "priority") &&
+      !["low", "medium", "high", "urgent"].includes(fields.priority)
+    )
+      fail(400, "Unknown priority.");
+    if (
+      fields.assigneeId !== undefined &&
+      fields.assigneeId !== null &&
+      !store.state.users.some((x) => x.id === fields.assigneeId)
+    )
+      fail(400, "Unknown assignee.");
+    if (
+      body.statusId !== undefined &&
+      !project.statuses.some((x) => x.id === body.statusId)
+    )
+      fail(400, "Unknown project status.");
+    return fields;
+  };
+  app.post("/api/tasks", (req, res) => {
+    const project = findProject(req.body.projectId);
+    const fields = validFields(req.body, project);
+    if (!fields.title) fail(400, "Task title is required.");
+    const statusId =
+      req.body.statusId ??
+      project.statuses.find((x) => x.kind === "backlog").id;
+    if (project.statuses.find((x) => x.id === statusId).kind !== "backlog")
+      fail(400, "Create tasks in Backlog, then move them to start work.");
+    const task = {
+      id: randomUUID(),
+      projectId: project.id,
+      title: "",
+      description: "",
+      acceptanceCriteria: "",
+      discipline: "programming",
+      priority: "medium",
+      assigneeId: null,
+      ...fields,
+      statusId,
+      messages: [],
+    };
+    store.transaction((s) => {
+      s.tasks.push(task);
+      store.event("task.created", { taskId: task.id, projectId: project.id });
+    });
+    res.status(201).json({ task });
+  });
+  app.patch("/api/tasks/:id", (req, res) => {
+    const task = findTask(req.params.id);
+    const project = findProject(task.projectId);
+    const fields = validFields(req.body, project);
+    const statusId = req.body.statusId;
+    store.transaction(() => {
+      Object.assign(task, fields);
+      if (statusId !== undefined && statusId !== task.statusId) {
+        if (scheduler) scheduler.transition(task.id, statusId, req.user.id);
+        else {
+          const status = project.statuses.find((x) => x.id === statusId);
+          if (["execution", "review", "done"].includes(status.kind))
+            fail(409, "This stage requires execution and human review.");
+          task.statusId = statusId;
+        }
+      }
+      store.event("task.updated", { taskId: task.id, projectId: project.id });
+    });
+    res.json({ task: findTask(task.id) });
+  });
+  const execute = (method) => async (req, res) => {
+    if (!scheduler) fail(503, "Task execution is unavailable.");
+    const id = req.params.id;
+    let result;
+    if (method === "start")
+      result = await scheduler.start(id, req.user.id, req.body.requestKey);
+    if (method === "message")
+      result = await scheduler.message(id, req.body.text, req.user.id);
+    if (method === "accept") result = await scheduler.accept(id, req.user.id);
+    if (method === "cancel") result = await scheduler.cancel(id, req.user.id);
+    if (method === "respond")
+      result = await scheduler.respond(
+        id,
+        req.params.requestId,
+        req.body.response,
+        req.user.id,
+      );
+    res.json(
+      method === "start"
+        ? { run: result }
+        : method === "accept"
+          ? { task: result }
+          : (result ?? { ok: true }),
+    );
+  };
+  app.post("/api/tasks/:id/run", execute("start"));
+  app.post("/api/tasks/:id/messages", execute("message"));
+  app.post("/api/tasks/:id/accept", execute("accept"));
+  app.post("/api/runs/:id/cancel", execute("cancel"));
+  app.post("/api/runs/:id/requests/:requestId", execute("respond"));
+
+  app.post("/api/invitations", owner, (req, res) => {
+    const hours = req.body.expiresInHours ?? 24;
+    if (typeof hours !== "number" || hours <= 0 || hours > 168)
+      fail(400, "Invitation expiry must be between 0 and 168 hours.");
+    const invitation = {
+      id: randomUUID(),
+      token: randomBytes(32).toString("hex"),
+      expiresAt: Date.now() + hours * 3600000,
+      createdBy: req.user.id,
+    };
+    store.transaction((s) => s.invitations.push(invitation));
+    res.status(201).json({
+      token: invitation.token,
+      expiresAt: invitation.expiresAt,
+      url: `/?invite=${invitation.token}`,
+    });
+  });
+  app.patch("/api/settings", owner, (req, res) => {
+    const settings = { ...store.state.settings };
+    for (const key of ["capacity", "executable", "model", "runner"])
+      if (Object.hasOwn(req.body, key)) settings[key] = req.body[key];
+    if (
+      !Number.isInteger(settings.capacity) ||
+      settings.capacity < 1 ||
+      settings.capacity > 32
+    )
+      fail(400, "Capacity must be an integer between 1 and 32.");
+    if (
+      typeof settings.executable !== "string" ||
+      !settings.executable.trim() ||
+      typeof settings.model !== "string" ||
+      settings.runner !== "codex"
+    )
+      fail(400, "Invalid runner settings.");
+    store.transaction((s) => {
+      s.settings = settings;
+      store.event("settings.updated", {});
+    });
+    scheduler?.pump();
+    res.json({ settings });
+  });
+  const validatedProject = (body) => {
+    if (
+      typeof body.name !== "string" ||
+      !body.name.trim() ||
+      typeof body.path !== "string" ||
+      !body.path.trim() ||
+      typeof body.testCommand !== "string" ||
+      !body.testCommand.trim() ||
+      (body.buildCommand !== undefined && typeof body.buildCommand !== "string")
+    )
+      fail(400, "Project needs a name, local Git path, and test command.");
+    const path = resolve(body.path);
+    const revision = body.revision ?? "HEAD";
+    if (typeof revision !== "string" || revision.startsWith("-"))
+      fail(400, "Invalid starting revision.");
+    try {
+      execFileSync("git", ["-C", path, "rev-parse", "--show-toplevel"], {
+        stdio: "pipe",
+      });
+      const commit = execFileSync(
+        "git",
+        ["-C", path, "rev-parse", "--verify", `${revision}^{commit}`],
+        { encoding: "utf8", stdio: "pipe" },
+      ).trim();
+      return {
+        name: body.name.trim(),
+        path,
+        revision: commit,
+        buildCommand: body.buildCommand ?? "",
+        testCommand: body.testCommand,
+      };
+    } catch {
+      fail(
+        400,
+        "Repository path must be a local Git checkout with the requested committed revision.",
+      );
+    }
+  };
+  app.post("/api/projects", owner, (req, res) => {
+    const project = projectDefaults({
+      id: randomUUID(),
+      ...validatedProject(req.body),
+    });
+    store.transaction((s) => {
+      s.projects.push(project);
+      store.event("project.created", { projectId: project.id });
+    });
+    res.status(201).json({ project });
+  });
+  app.patch("/api/projects/:id", owner, (req, res) => {
+    const project = findProject(req.params.id);
+    if (
+      store.state.runs.some(
+        (x) =>
+          x.projectId === project.id &&
+          ["queued", "starting", "running", "waiting", "verifying"].includes(
+            x.state,
+          ),
+      )
+    )
+      fail(
+        409,
+        "Wait for active project runs before changing repository configuration.",
+      );
+    const fields = validatedProject({
+      ...project,
+      ...Object.fromEntries(
+        Object.entries(req.body).filter(([k]) =>
+          ["name", "path", "revision", "buildCommand", "testCommand"].includes(
+            k,
+          ),
+        ),
+      ),
+    });
+    store.transaction(() => {
+      Object.assign(project, fields);
+      store.event("project.updated", { projectId: project.id });
+    });
+    res.json({ project });
+  });
+  app.put("/api/projects/:id/workflow", owner, (req, res) => {
+    const project = findProject(req.params.id);
+    const statuses = req.body.statuses;
+    const rule = req.body.rule;
+    if (
+      !Array.isArray(statuses) ||
+      statuses.length < 6 ||
+      statuses.length > 30 ||
+      statuses.some(
+        (x) =>
+          !x ||
+          typeof x.id !== "string" ||
+          !x.id ||
+          typeof x.name !== "string" ||
+          !x.name.trim() ||
+          ![
+            "backlog",
+            "ready",
+            "execution",
+            "review",
+            "done",
+            "blocked",
+            "custom",
+          ].includes(x.kind),
+      ) ||
+      new Set(statuses.map((x) => x.id)).size !== statuses.length
+    )
+      fail(
+        400,
+        "Statuses require unique stable identities, names, and valid meanings.",
+      );
+    for (const old of project.statuses) {
+      const next = statuses.find((x) => x.id === old.id);
+      if (
+        !next &&
+        (store.state.tasks.some(
+          (x) => x.projectId === project.id && x.statusId === old.id,
+        ) ||
+          [project.rule.triggerStatus, project.rule.reviewStatus].includes(
+            old.id,
+          ))
+      )
+        fail(
+          409,
+          "Move tasks and rule references before removing this status.",
+        );
+      if (next && next.kind !== old.kind)
+        fail(400, "A status meaning cannot be changed.");
+    }
+    for (const kind of [
+      "backlog",
+      "ready",
+      "execution",
+      "review",
+      "done",
+      "blocked",
+    ])
+      if (statuses.filter((x) => x.kind === kind).length !== 1)
+        fail(400, "Keep exactly one status for each built-in stage meaning.");
+    if (
+      !rule ||
+      typeof rule.enabled !== "boolean" ||
+      typeof rule.instructions !== "string" ||
+      (rule.buildCommand !== null && typeof rule.buildCommand !== "string") ||
+      (rule.testCommand !== null &&
+        (typeof rule.testCommand !== "string" || !rule.testCommand.trim())) ||
+      !statuses.some(
+        (x) =>
+          x.id === rule.triggerStatus &&
+          ["backlog", "ready", "custom"].includes(x.kind),
+      ) ||
+      !statuses.some((x) => x.id === rule.reviewStatus && x.kind === "review")
+    )
+      fail(
+        400,
+        "Rule needs a valid start status, human Review destination, instructions, and test command.",
+      );
+    store.transaction(() => {
+      project.statuses = statuses.map(({ id, name, kind }) => ({
+        id,
+        name: name.trim(),
+        kind,
+      }));
+      project.rule = {
+        enabled: rule.enabled,
+        triggerStatus: rule.triggerStatus,
+        reviewStatus: rule.reviewStatus,
+        instructions: rule.instructions,
+        buildCommand: rule.buildCommand,
+        testCommand: rule.testCommand,
+        commandInheritanceVersion: 1,
+      };
+      store.event("workflow.updated", { projectId: project.id });
+    });
+    res.json({ project });
+  });
+  app.get("/api/health", owner, async (req, res) => {
+    const health = await inspectCodexHost(store.state.settings);
+    res.json({
+      ...health,
+      message:
+        health.message ??
+        "CLI login detected. Model connectivity has not been tested.",
+      modelConnectivity: "unverified",
+      runner: store.state.settings.runner,
+    });
+  });
+  app.get("/api/settings", (req, res) =>
+    res.json({ settings: store.state.settings }),
+  );
+  app.use("/sample-game", express.static(join(root, "sample-game")));
+  if (existsSync(join(root, "dist"))) {
+    app.use(express.static(join(root, "dist")));
+    app.get(/^(?!\/api).*/, (req, res) =>
+      res.sendFile(join(root, "dist/index.html")),
+    );
+  } else
+    app.get("/", (req, res) =>
+      res
+        .type("html")
+        .send(
+          "<!doctype html><html><body><h1>Orches AI Kanban</h1><p>Run npm run build to build the browser application.</p></body></html>",
+        ),
+    );
+  app.use("/api", (req, res) =>
+    res.status(404).json({ error: "API operation not found." }),
+  );
+  app.use((error, req, res, next) => {
+    if (res.headersSent) return next(error);
+    res
+      .status(
+        error.status ?? (error.type === "entity.parse.failed" ? 400 : 500),
+      )
+      .json({
+        error: error.status
+          ? error.message
+          : "The operation failed. Check server logs.",
+      });
+    if (!error.status) console.error(error);
+  });
+  return {
+    app,
+    store,
+    scheduler,
+    async close() {
+      await scheduler?.close();
+      for (const responses of streams.values())
+        for (const res of responses) res.end();
+      await Promise.all(
+        [...servers].map(
+          (server) =>
+            new Promise((resolve) => {
+              server.close(resolve);
+              // All task processes and event streams have stopped. Do not let
+              // browser keep-alive connections delay host restart indefinitely.
+              server.closeAllConnections();
+            }),
+        ),
+      );
+      store.close();
+    },
+  };
+}
