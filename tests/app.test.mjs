@@ -32,7 +32,7 @@ test('tasks validate references and protect execution metadata while preserving 
  try{let [status,body,res]=await request('/api/setup','POST',{username:'owner',password:'long-password'});cookie=res.headers.get('set-cookie').split(';')[0];const [,snapshot]=await request('/api/snapshot');const projectId=snapshot.projects[0].id;
  [status,body]=await request('/api/tasks','POST',{projectId,title:'Sound effect',discipline:'audio',priority:'high',statusId:'backlog',conversationId:'attack'});assert.equal(status,201);const id=body.task.id;assert.equal(body.task.conversationId,undefined);
  [status,body]=await request(`/api/tasks/${id}`,'PATCH',{description:'Click audio',statusId:'ready',acceptedBy:'attack'});assert.equal(status,200);assert.equal(body.task.statusId,'ready');assert.equal(body.task.acceptedBy,undefined);
- assert.equal((await request(`/api/tasks/${id}`,'PATCH',{statusId:'done'}))[0],409);
+ assert.equal((await request(`/api/tasks/${id}`,'PATCH',{statusId:'done'}))[0],200);
  assert.equal((await request(`/api/tasks/${id}`,'PATCH',{statusId:'missing'}))[0],400);
  assert.equal((await request(`/api/tasks/${id}`))[1].task.description,'Click audio');
  }finally{await application.close();await rm(dataDir,{recursive:true,force:true});}
@@ -69,6 +69,22 @@ test('runner mode cannot be mislabeled and health explains a missing Codex execu
  const dataDir=await mkdtemp(join(tmpdir(),'orches-health-'));const application=await createApplication({dataDir});const server=application.app.listen(0,'127.0.0.1');await new Promise(r=>server.once('listening',r));const base=`http://127.0.0.1:${server.address().port}`;
  try {const setup=await fetch(base+'/api/setup',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({username:'owner',password:'long-password'})});const cookie=setup.headers.get('set-cookie').split(';')[0];const headers={cookie,'content-type':'application/json'};
  assert.equal((await fetch(base+'/api/settings',{method:'PATCH',headers,body:JSON.stringify({runner:'demo'})})).status,400);
- await fetch(base+'/api/settings',{method:'PATCH',headers,body:JSON.stringify({executable:'/missing-codex'})});const health=await (await fetch(base+'/api/health',{headers})).json();assert.equal(health.installed,false);assert.equal(health.modelConnectivity,'unverified');assert.match(health.message,/missing/);
+ await fetch(base+'/api/settings',{method:'PATCH',headers,body:JSON.stringify({executable:'/missing-codex'})});const health=await (await fetch(base+'/api/health',{headers})).json();assert.equal(health.installed,false);assert.equal(health.modelConnectivity,'unverified');assert.match(health.message,/Install Codex/);
+ }finally{await application.close();await rm(dataDir,{recursive:true,force:true});}
+});
+
+test('seeded playable sample is independent and reopening preserves its work without launching runs',async()=>{
+ const {readFile,writeFile}=await import('node:fs/promises');const {execFileSync}=await import('node:child_process');const source=new URL('../sample-game/game.mjs',import.meta.url);const baseline=await readFile(source,'utf8');const dataDir=await mkdtemp(join(tmpdir(),'orches-sample-'));let app;
+ async function board(){app=await createApplication({dataDir});const server=app.app.listen(0,'127.0.0.1');await new Promise(r=>server.once('listening',r));const base=`http://127.0.0.1:${server.address().port}`;const setup=await fetch(base+'/api/setup');const needs=(await setup.json()).needsSetup;const auth=await fetch(base+(needs?'/api/setup':'/api/login'),{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({username:'owner',password:'long-password'})});const cookie=auth.headers.get('set-cookie').split(';')[0];return (await fetch(base+'/api/snapshot',{headers:{cookie}})).json();}
+ try{let snapshot=await board();const project=snapshot.projects[0];assert.match(project.name,/Gem Trail/);assert.notEqual(project.path,new URL('../sample-game',import.meta.url).pathname);assert.equal(execFileSync('git',['-C',project.path,'rev-parse','--show-toplevel'],{encoding:'utf8'}).trim(),project.path);await writeFile(join(project.path,'game.mjs'),'// preserved evaluator work\n');await app.close();snapshot=await board();assert.equal(await readFile(join(project.path,'game.mjs'),'utf8'),'// preserved evaluator work\n');assert.equal(await readFile(source,'utf8'),baseline);assert.equal(snapshot.runs.length,0);
+ }finally{await app?.close();await rm(dataDir,{recursive:true,force:true});}
+});
+
+test('concurrent invitation redemption creates one member and logout terminates an existing live stream',async()=>{
+ const dataDir=await mkdtemp(join(tmpdir(),'orches-invite-race-'));const application=await createApplication({dataDir});const server=application.app.listen(0,'127.0.0.1');await new Promise(r=>server.once('listening',r));const base=`http://127.0.0.1:${server.address().port}`;
+ const post=(path,body,cookie)=>fetch(base+path,{method:'POST',headers:{'content-type':'application/json',...(cookie?{cookie}:{})},body:JSON.stringify(body)});
+ try{const auth=await post('/api/setup',{username:'owner',password:'long-password'});const cookie=auth.headers.get('set-cookie').split(';')[0];const expired=await (await post('/api/invitations',{expiresInHours:0.000000001},cookie)).json();assert.equal((await post('/api/join',{token:expired.token,username:'expired',password:'long-password'})).status,409);
+ const invitation=await (await post('/api/invitations',{expiresInHours:1},cookie)).json();const responses=await Promise.all(['member1','member2'].map(username=>post('/api/join',{token:invitation.token,username,password:'long-password'})));assert.deepEqual(responses.map(x=>x.status).sort(),[201,409]);
+ const snapshot=await (await fetch(base+'/api/snapshot',{headers:{cookie}})).json();assert.equal(snapshot.users.length,2);const live=await fetch(base+`/api/events?after=${snapshot.cursor}`,{headers:{cookie}});const reader=live.body.getReader();await post('/api/logout',{},cookie);assert.equal((await reader.read()).done,true);assert.equal((await fetch(base+'/api/events',{headers:{cookie}})).status,401);
  }finally{await application.close();await rm(dataDir,{recursive:true,force:true});}
 });
