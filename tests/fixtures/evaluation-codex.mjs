@@ -27,10 +27,12 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
           delta:
             JSON.stringify({
               Authorization: "Bearer json-bearer-secret",
-              Cookie: "json-cookie-secret",
+              Cookie: 'session="escaped-json-cookie-secret"',
               orches_session: "json-session-secret",
             }) +
-            "\n" +
+            '\nCookie: session="quoted-cookie-secret"\nAuthorization: Digest username="alice", response="digest-secret"\n' +
+            "\norches_session=\"standalone-session-secret\"; Path=/\norches_session='single-session-secret'; Path=/\n" +
+            'token="quoted-token-secret"\napi_key="quoted-api-key-secret"\n' +
             JSON.stringify(
               JSON.stringify({ Authorization: "Bearer escaped-header-secret" }),
             ),

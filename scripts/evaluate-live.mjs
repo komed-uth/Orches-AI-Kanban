@@ -64,6 +64,8 @@ export async function evaluateLive({
     base,
     taskIds = new Set(),
     collectionClosing = false;
+  const baselineRuns = new Set();
+  const requestedTasks = new Set();
   const states = new Map();
   const connectivityBlockers = new Map();
   const connectivityRejected = (text = "") =>
@@ -206,9 +208,23 @@ export async function evaluateLive({
         "GET",
         signal,
       );
-      const owned = summary.runs.find((r) => r.taskId === id);
-      const run = runs.find((r) => r.id === owned?.id);
-      if (!run) continue;
+      let owned = summary.runs.find((r) => r.taskId === id);
+      // Admission is durable before its HTTP response reaches the collector.
+      // Reconcile only requested tasks and runs absent from the initial snapshot,
+      // so a deadline in that acknowledgment window retains the actual attempt.
+      const run = runs.find((r) =>
+        owned
+          ? r.id === owned.id
+          : requestedTasks.has(id) && !baselineRuns.has(r.id),
+      );
+      if (!run) {
+        if (owned) summary.evidence.missing = true;
+        continue;
+      }
+      if (!owned) {
+        owned = { id: run.id, taskId: id };
+        summary.runs.push(owned);
+      }
       Object.assign(owned, {
         state: run.state,
         worktree: task.worktree,
@@ -276,6 +292,7 @@ export async function evaluateLive({
       throw new Error(
         "Seeded tasks already accepted; use a new evaluation runtime.",
       );
+    for (const run of snapshot.runs) baselineRuns.add(run.id);
     taskIds = new Set(tasks.map((t) => t.id));
     summary.evidence.lastCursor = snapshot.cursor;
     await api(
@@ -296,8 +313,9 @@ export async function evaluateLive({
           stop("event-stream-failed");
         }
       });
-    // Separate requests retain each acknowledged run even if a later start fails.
+    // Remember requested admission before awaiting its acknowledgment.
     for (const task of tasks) {
+      requestedTasks.add(task.id);
       const { run } = await api("/tasks/" + task.id + "/run", {});
       summary.runs.push({ id: run.id, taskId: task.id, state: run.state });
     }

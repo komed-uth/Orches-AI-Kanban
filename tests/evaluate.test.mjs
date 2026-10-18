@@ -325,10 +325,23 @@ test("live evidence redacts quoted and escaped JSON authentication fields absent
   const events = await readFile(join(f.output, "events.ndjson"), "utf8");
   assert.doesNotMatch(
     events,
-    /json-bearer-secret|json-cookie-secret|json-session-secret|escaped-header-secret/,
+    /json-bearer-secret|quoted-cookie-secret|escaped-json-cookie-secret|digest-secret|quoted-token-secret|quoted-api-key-secret|standalone-session-secret|single-session-secret|json-session-secret|escaped-header-secret/,
   );
-  assert.match(events, /REDACTED/);
-  assert.equal((await f.summary()).outcome, "awaiting-human-review");
+  const records = events
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line));
+  const summary = await f.summary();
+  for (const run of summary.runs)
+    assert.ok(
+      records.some(
+        (event) =>
+          event.runId === run.id &&
+          event.taskId === run.taskId &&
+          event.text?.includes("[REDACTED]"),
+      ),
+    );
+  assert.equal(summary.outcome, "awaiting-human-review");
 });
 for (const mode of ["retry-blocked", "connected-timeout"])
   test(`${mode} retains accurate per-run connectivity after deadline cleanup`, async (t) => {
@@ -480,4 +493,90 @@ test("reusing an evidence output directory preserves the prior summary and event
   assert.match(JSON.parse(again.stdout).blocker, /new.*--output/);
   assert.equal(await readFile(join(f.output, "summary.json"), "utf8"), summary);
   assert.equal(await readFile(join(f.output, "events.ndjson"), "utf8"), events);
+});
+test("deadline after run admission retains the unacknowledged run and its final evidence", async (t) => {
+  const f = await fixture(t);
+  const credentials = {
+    ORCHES_EVAL_USERNAME: "evaluator",
+    ORCHES_EVAL_PASSWORD: "test-password-123",
+  };
+  const initial = await f.run(
+    [
+      "--live",
+      "--fixture",
+      "--executable",
+      resolve("tests/fixtures/evaluation-codex.mjs"),
+      "--deadline-ms",
+      "5000",
+    ],
+    credentials,
+  );
+  assert.equal(initial.code, 2, initial.stderr);
+  assert.equal((await f.summary()).outcome, "awaiting-human-review");
+  const priorRuns = (await f.summary()).runs.map((run) => run.id);
+  const output = join(f.root, "delayed-evidence");
+  const result = await f.run(
+    [
+      "--live",
+      "--fixture",
+      "--executable",
+      resolve("tests/fixtures/evaluation-codex.mjs"),
+      "--deadline-ms",
+      "1500",
+      "--output",
+      output,
+    ],
+    {
+      ORCHES_EVAL_USERNAME: "evaluator",
+      ORCHES_EVAL_PASSWORD: "test-password-123",
+      EVALUATION_FIXTURE: "timeout",
+      NODE_OPTIONS: `--import=${resolve("tests/fixtures/evaluation-delayed-response.mjs")}`,
+    },
+  );
+  assert.equal(result.code, 2, result.stderr);
+  const summary = JSON.parse(
+    await readFile(join(output, "summary.json"), "utf8"),
+  );
+  const events = (await readFile(join(output, "events.ndjson"), "utf8"))
+    .trim()
+    .split("\n")
+    .map(JSON.parse);
+  const admitted = events.find((event) => event.type === "run.queued");
+  assert.ok(admitted);
+  assert.equal(summary.termination, "deadline");
+  assert.equal(summary.runs.length, 1);
+  const [run] = summary.runs;
+  assert.equal(run.id, admitted.runId);
+  assert.ok(!priorRuns.includes(run.id));
+  assert.equal(run.taskId, admitted.taskId);
+  assert.ok(["cancelled", "interrupted"].includes(run.state));
+  assert.ok(run.branch);
+  assert.ok(run.baseRevision);
+  assert.equal(run.initialization, "verified");
+  assert.equal(summary.phases.initialization, "partial");
+  const pid = Number(
+    await readFile(join(run.worktree, "fixture-pid.txt"), "utf8"),
+  );
+  assert.throws(() => process.kill(pid, 0), { code: "ESRCH" });
+  assert.ok(
+    events.some(
+      (event) => event.runId === run.id && event.type === "run.evidence",
+    ),
+  );
+  assert.equal(summary.evidence.lastCursor, summary.evidence.cleanupCursor);
+});
+test("console evidence stays below 4 KiB when JSON escaping expands the artifact path", async (t) => {
+  const f = await fixture(t);
+  const output = join(f.root, ...Array(6).fill("\u0001".repeat(160)));
+  const result = await f.run(["--output", output]);
+  assert.equal(result.code, 0, result.stderr);
+  assert.ok(Buffer.byteLength(result.stdout) < 4096);
+  const consoleSummary = JSON.parse(result.stdout);
+  const retained = JSON.parse(
+    await readFile(join(output, "summary.json"), "utf8"),
+  );
+  assert.equal(consoleSummary.outcome, retained.outcome);
+  assert.equal(consoleSummary.mode, retained.mode);
+  assert.deepEqual(consoleSummary.phases, retained.phases);
+  assert.match(consoleSummary.artifact, /summary\.json/);
 });
