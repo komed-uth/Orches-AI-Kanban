@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { createStore } from './store.mjs';
 import { seedSampleProject } from './sample.mjs';
+import { inspectCodexHost } from './codex.mjs';
 
 const root=resolve(dirname(fileURLToPath(import.meta.url)),'..');
 export const defaultStatuses=()=>['Backlog','Ready','In Progress','Review','Done','Blocked'].map((name,i)=>({id:['backlog','ready','progress','review','done','blocked'][i],name,kind:['backlog','ready','execution','review','done','blocked'][i]}));
@@ -48,16 +49,17 @@ export async function createApplication({dataDir=resolve('.orches-data'),runnerF
   const fields={};for(const key of ['title','description','acceptanceCriteria','discipline','priority','assigneeId'])if(Object.hasOwn(body,key))fields[key]=body[key];
   for(const key of ['title','description','acceptanceCriteria'])if(Object.hasOwn(fields,key)&&(typeof fields[key]!=='string'||fields[key].length>50000))fail(400,`Invalid ${key}.`);
   if(Object.hasOwn(fields,'title')&&!fields.title.trim())fail(400,'Task title is required.');
-  if(fields.discipline&&!['programming','qa','design','art','animation','audio'].includes(fields.discipline))fail(400,'Unknown discipline.');
-  if(fields.priority&&!['low','medium','high','urgent'].includes(fields.priority))fail(400,'Unknown priority.');
+  if(Object.hasOwn(fields,'discipline')&&!['programming','qa','design','art','animation','audio'].includes(fields.discipline))fail(400,'Unknown discipline.');
+  if(Object.hasOwn(fields,'priority')&&!['low','medium','high','urgent'].includes(fields.priority))fail(400,'Unknown priority.');
   if(fields.assigneeId!==undefined&&fields.assigneeId!==null&&!store.state.users.some(x=>x.id===fields.assigneeId))fail(400,'Unknown assignee.');
   if(body.statusId!==undefined&&!project.statuses.some(x=>x.id===body.statusId))fail(400,'Unknown project status.');
   return fields;
  };
  app.post('/api/tasks',(req,res)=>{const project=findProject(req.body.projectId);const fields=validFields(req.body,project);if(!fields.title)fail(400,'Task title is required.');const statusId=req.body.statusId??project.statuses.find(x=>x.kind==='backlog').id;if(project.statuses.find(x=>x.id===statusId).kind!=='backlog')fail(400,'Create tasks in Backlog, then move them to start work.');const task={id:randomUUID(),projectId:project.id,title:'',description:'',acceptanceCriteria:'',discipline:'programming',priority:'medium',assigneeId:null,...fields,statusId,messages:[]};store.transaction(s=>{s.tasks.push(task);store.event('task.created',{taskId:task.id,projectId:project.id});});res.status(201).json({task});});
- app.patch('/api/tasks/:id',async(req,res)=>{const task=findTask(req.params.id);const project=findProject(task.projectId);const fields=validFields(req.body,project);const statusId=req.body.statusId;
-  if(statusId!==undefined&&statusId!==task.statusId){if(scheduler)await scheduler.transition(task.id,statusId,req.user.id);else {const status=project.statuses.find(x=>x.id===statusId);if(['execution','review','done'].includes(status.kind))fail(409,'This stage requires execution and human review.');store.transaction(()=>{task.statusId=statusId;});}}
-  store.transaction(()=>{Object.assign(task,fields);store.event('task.updated',{taskId:task.id,projectId:project.id});});res.json({task:findTask(task.id)});
+ app.patch('/api/tasks/:id',(req,res)=>{const task=findTask(req.params.id);const project=findProject(task.projectId);const fields=validFields(req.body,project);const statusId=req.body.statusId;
+  store.transaction(()=>{Object.assign(task,fields);
+   if(statusId!==undefined&&statusId!==task.statusId){if(scheduler)scheduler.transition(task.id,statusId,req.user.id);else {const status=project.statuses.find(x=>x.id===statusId);if(['execution','review','done'].includes(status.kind))fail(409,'This stage requires execution and human review.');task.statusId=statusId;}}
+   store.event('task.updated',{taskId:task.id,projectId:project.id});});res.json({task:findTask(task.id)});
  });
  const execute=(method)=>async(req,res)=>{if(!scheduler)fail(503,'Task execution is unavailable.');const id=req.params.id;let result;if(method==='start')result=await scheduler.start(id,req.user.id,req.body.requestKey);if(method==='message')result=await scheduler.message(id,req.body.text,req.user.id);if(method==='accept')result=await scheduler.accept(id,req.user.id);if(method==='cancel')result=await scheduler.cancel(id,req.user.id);if(method==='respond')result=await scheduler.respond(id,req.params.requestId,req.body.response,req.user.id);res.json(method==='start'?{run:result}:method==='accept'?{task:result}:result??{ok:true});};
  app.post('/api/tasks/:id/run',execute('start'));app.post('/api/tasks/:id/messages',execute('message'));app.post('/api/tasks/:id/accept',execute('accept'));app.post('/api/runs/:id/cancel',execute('cancel'));app.post('/api/runs/:id/requests/:requestId',execute('respond'));
@@ -74,7 +76,7 @@ export async function createApplication({dataDir=resolve('.orches-data'),runnerF
   if(!rule||typeof rule.enabled!=='boolean'||typeof rule.instructions!=='string'||typeof rule.buildCommand!=='string'||typeof rule.testCommand!=='string'||!rule.testCommand.trim()||!statuses.some(x=>x.id===rule.triggerStatus&&['backlog','ready','custom'].includes(x.kind))||!statuses.some(x=>x.id===rule.reviewStatus&&x.kind==='review'))fail(400,'Rule needs a valid start status, human Review destination, instructions, and test command.');
   store.transaction(()=>{project.statuses=statuses.map(({id,name,kind})=>({id,name:name.trim(),kind}));project.rule={enabled:rule.enabled,triggerStatus:rule.triggerStatus,reviewStatus:rule.reviewStatus,instructions:rule.instructions,buildCommand:rule.buildCommand,testCommand:rule.testCommand};store.event('workflow.updated',{projectId:project.id});});res.json({project});
  });
- app.get('/api/health',owner,async(req,res)=>{let installed=false,loggedIn=false,version='',message='';const executable=store.state.settings.executable;try{version=execFileSync(executable,['--version'],{encoding:'utf8',timeout:5000,stdio:['ignore','pipe','pipe']}).trim();installed=true;try{const status=execFileSync(executable,['login','status'],{encoding:'utf8',timeout:5000,stdio:['ignore','pipe','pipe']}).trim();loggedIn=/logged in|authenticated/i.test(status);message=loggedIn?'CLI login detected. Model connectivity has not been tested.':'Codex login was not detected. Run codex login on the host.';}catch{message='Codex login unavailable. Run codex login on the host.';}}catch{message='Codex executable is missing or cannot run. Install Codex CLI or correct the executable path.';}res.json({installed,loggedIn,version,message,modelConnectivity:'unverified',runner:store.state.settings.runner});});
+ app.get('/api/health',owner,async(req,res)=>{const health=await inspectCodexHost(store.state.settings);res.json({...health,message:health.message??'CLI login detected. Model connectivity has not been tested.',modelConnectivity:'unverified',runner:store.state.settings.runner});});
  app.get('/api/settings',(req,res)=>res.json({settings:store.state.settings}));
  app.use('/sample-game',express.static(join(root,'sample-game')));
  if(existsSync(join(root,'dist'))) {app.use(express.static(join(root,'dist')));app.get(/^(?!\/api).*/,(req,res)=>res.sendFile(join(root,'dist/index.html')));}
