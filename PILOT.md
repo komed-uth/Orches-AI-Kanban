@@ -9,12 +9,12 @@ Supported pilot host: Linux. Process-group supervision uses POSIX signals; Windo
 From the repository root:
 
 ```sh
-npm install
+npm ci
 npm run build
 npm start
 ```
 
-Open the localhost URL printed by the server. Create the first owner account in the setup form. For application development use `npm run dev`; it builds the browser client before starting a server that watches backend files. Rebuild after client edits. The production flow above serves the built client. Run checks with `npm test` and `npm run build`. For browser checks, run `npx playwright install chromium` and `npm run test:browser`. The sample's independent baseline is `node --test sample-game/tests/*.test.mjs` from the application repository, or `node --test tests/*.test.mjs` from the seeded game repository.
+Open the localhost URL printed by the server. Create the first owner account in the setup form. For application development use `npm run dev`; it builds the browser client before starting a server that watches backend files. Rebuild after client edits. The production flow above serves the built client. Run contributor checks with `npm test`, the read-only `npm run format:check`, and `npm run build`. `npm test` checks required host capabilities and requires per-file test-body execution evidence; a successful file wrapper alone is insufficient. It uses controlled external processes and does not call a model. Use `npm run format` to apply the pinned formatter to application sources and tooling/tests; the independent Pages surface is excluded. See [module ownership](contributor/architecture.md) and the conditional [review reference](contributor/review.md). For browser checks, run `npx playwright install chromium` and `npm run test:browser`. The sample's independent baseline is `node --test sample-game/tests/*.test.mjs` from the application repository, or `node --test tests/*.test.mjs` from the seeded game repository.
 
 The server binds localhost by default. To permit a small trusted team to connect, deliberately set `HOST=0.0.0.0` and a `PORT`, then use the host's trusted LAN address. Restrict access with the host firewall or a trusted VPN. Local account cookies over plain HTTP do not provide transport encryption; use a trusted TLS reverse proxy when needed. This pilot is not configured for public internet hosting. Team members use invitations created by the owner and shared manually; Codex authentication stays on the host. Members can manage tasks, respond to requests, and review work; owner settings control repositories and executable commands.
 
@@ -76,4 +76,4 @@ For any blocked item include the exact command or operation, observed error, and
 
 The real attempt used the two seeded tasks and independent worktrees. Run IDs were `82f17105-9b34-4e68-83ee-e3d4e4aa571b` and `6a62c359-d2b8-4a31-8351-75c134711d46`; both reached Running with distinct Codex conversations. The proxy reported `HTTP CONNECT failed with status 403` for `wss://chatgpt.com/backend-api/codex/responses`, followed by `Reconnecting... waiting for network`. Both were stopped after a two-minute observation window, retaining interrupted history. The initial attempt also exposed a read-only Codex runtime directory; a scoped write grant allowed initialization on the second attempt. No proxy bypass or replacement credentials were used.
 
-Issue #1 remains open: successful overlapping real-model edits, configured verification, resumed follow-up context, and human acceptance still need evaluation on a host permitted to reach the model service. The app's repeatable verification paths passed with fixtures; the live loop has not been claimed as verified.
+[Issue #1](https://github.com/komed-uth/Orches-AI-Kanban/issues/1) is closed. Remaining live validation is tracked in [issue #17](https://github.com/komed-uth/Orches-AI-Kanban/issues/17): successful overlapping real-model edits, configured verification, resumed follow-up context, and human acceptance still need evaluation on a host permitted to reach the model service. The app's repeatable verification paths passed with fixtures; the live loop has not been claimed as verified.
