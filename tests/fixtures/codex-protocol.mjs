@@ -12,6 +12,7 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
     send({ id: m.id, result: { thread: { id: threadId } } });
   } else if (m.method === "turn/start") {
     mode = m.params.input[0].text;
+    writeFileSync("prompt.txt", mode);
     if (mode.includes("diagnostics"))
       process.stderr.write(
         "logging=" + process.env.RUST_LOG + "\n" + "x".repeat(100000),

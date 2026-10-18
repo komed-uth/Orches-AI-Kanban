@@ -60,8 +60,9 @@ function projectDefaults(record) {
       triggerStatus: "ready",
       reviewStatus: "review",
       instructions: "",
-      buildCommand: record.buildCommand ?? "",
-      testCommand: record.testCommand ?? "node --test",
+      buildCommand: null,
+      testCommand: null,
+      commandInheritanceVersion: 1,
     },
   };
 }
@@ -93,6 +94,16 @@ export async function createApplication({
 } = {}) {
   const store = createStore(dataDir);
   await seed(store, dataDir);
+  // Older records copied project defaults into rules without recording intent.
+  // Preserve distinct overrides and migrate matching copies to inheritance once.
+  store.transaction(() => {
+    for (const project of store.state.projects) {
+      if (project.rule.commandInheritanceVersion) continue;
+      for (const field of ["buildCommand", "testCommand"])
+        if (project.rule[field] === project[field]) project.rule[field] = null;
+      project.rule.commandInheritanceVersion = 1;
+    }
+  });
   const scheduler = await (schedulerFactory ?? createScheduler)({
     store,
     dataDir,
@@ -578,9 +589,9 @@ export async function createApplication({
       !rule ||
       typeof rule.enabled !== "boolean" ||
       typeof rule.instructions !== "string" ||
-      typeof rule.buildCommand !== "string" ||
-      typeof rule.testCommand !== "string" ||
-      !rule.testCommand.trim() ||
+      (rule.buildCommand !== null && typeof rule.buildCommand !== "string") ||
+      (rule.testCommand !== null &&
+        (typeof rule.testCommand !== "string" || !rule.testCommand.trim())) ||
       !statuses.some(
         (x) =>
           x.id === rule.triggerStatus &&
@@ -605,6 +616,7 @@ export async function createApplication({
         instructions: rule.instructions,
         buildCommand: rule.buildCommand,
         testCommand: rule.testCommand,
+        commandInheritanceVersion: 1,
       };
       store.event("workflow.updated", { projectId: project.id });
     });

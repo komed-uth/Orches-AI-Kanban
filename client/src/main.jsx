@@ -997,6 +997,11 @@ function TaskPanel({ task, project, snapshot, mutate, busy, close, onCreate }) {
                 </dd>
               </dl>
               {selected?.error && <div className="error">{selected.error}</div>}
+              {selected?.evidenceError && (
+                <div className="error">
+                  Git evidence unavailable: {selected.evidenceError}
+                </div>
+              )}
               <h3>Verification</h3>
               {!(selected?.verification?.results || []).length && (
                 <p>No verification results recorded.</p>
@@ -1328,8 +1333,10 @@ function Settings({ snapshot, project, mutate, selectProject }) {
                 triggerStatus: fields.triggerStatus,
                 reviewStatus: fields.reviewStatus,
                 instructions: fields.instructions,
-                buildCommand: fields.buildCommand,
-                testCommand: fields.testCommand,
+                buildCommand:
+                  fields.inheritBuild === "on" ? null : fields.buildCommand,
+                testCommand:
+                  fields.inheritTest === "on" ? null : fields.testCommand,
               };
               submit(
                 `/projects/${project.id}/workflow`,
@@ -1470,15 +1477,31 @@ function Settings({ snapshot, project, mutate, selectProject }) {
                 defaultValue={rule.instructions}
               />
             </Field>
+            <Field label="Use project build command">
+              <input
+                className="checkbox"
+                type="checkbox"
+                name="inheritBuild"
+                defaultChecked={rule.buildCommand === null}
+              />
+            </Field>
             <Field
               label="Automation build command (optional)"
               name="buildCommand"
-              defaultValue={rule.buildCommand}
+              defaultValue={rule.buildCommand ?? project.buildCommand}
             />
+            <Field label="Use project test command">
+              <input
+                className="checkbox"
+                type="checkbox"
+                name="inheritTest"
+                defaultChecked={rule.testCommand === null}
+              />
+            </Field>
             <Field
               label="Automation test command"
               name="testCommand"
-              defaultValue={rule.testCommand || project.testCommand}
+              defaultValue={rule.testCommand ?? project.testCommand}
               required
             />
             <p className="notice">
