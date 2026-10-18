@@ -12,7 +12,8 @@
     "start": "node server/index.mjs",
     "test:browser": "playwright test",
     "format": "prettier --write \"{server,client,sample-game,scripts,tests}/**/*.{mjs,js,jsx,json,css,html}\" \"{*.mjs,package.json,.github/workflows/test.yml}\"",
-    "format:check": "prettier --check \"{server,client,sample-game,scripts,tests}/**/*.{mjs,js,jsx,json,css,html}\" \"{*.mjs,package.json,.github/workflows/test.yml}\""
+    "format:check": "prettier --check \"{server,client,sample-game,scripts,tests}/**/*.{mjs,js,jsx,json,css,html}\" \"{*.mjs,package.json,.github/workflows/test.yml}\"",
+    "evaluate": "node scripts/evaluate.mjs"
   },
   "dependencies": {
     "express": "^5.1.0",
