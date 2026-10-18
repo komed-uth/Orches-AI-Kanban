@@ -580,3 +580,190 @@ test("console evidence stays below 4 KiB when JSON escaping expands the artifact
   assert.deepEqual(consoleSummary.phases, retained.phases);
   assert.match(consoleSummary.artifact, /summary\.json/);
 });
+
+test("interleaved run deltas redact split fields and configured secrets before export", async (t) => {
+  const f = await fixture(t);
+  await f.run(
+    [
+      "--live",
+      "--fixture",
+      "--executable",
+      resolve("tests/fixtures/evaluation-codex.mjs"),
+      "--deadline-ms",
+      "5000",
+    ],
+    {
+      ORCHES_EVAL_USERNAME: "evaluator",
+      ORCHES_EVAL_PASSWORD: "test-password-123",
+      EVALUATION_FIXTURE: "split-secrets",
+      SECRET_TOKEN: "configured-cross-fragment-secret",
+      SECRET_MULTILINE_TOKEN: "multi-line-head\nmulti-line-tail",
+    },
+  );
+  const summary = await f.summary();
+  const artifact = await readFile(join(f.output, "events.ndjson"), "utf8");
+  assert.doesNotMatch(
+    artifact,
+    /split-cookie-secret|configured-cross-|fragment-secret|terminal-secret|multi-line-head|multi-line-tail/,
+  );
+  const events = artifact.trim().split("\n").map(JSON.parse);
+  assert.ok(
+    events.every(
+      (event, index) => index === 0 || events[index - 1].id < event.id,
+    ),
+  );
+  for (const marker of ["gem", "restart"]) {
+    const before = events.find((event) =>
+      event.text?.includes(`${marker}-before`),
+    );
+    assert.ok(before);
+    const text = events
+      .filter((event) => event.runId === before.runId)
+      .map((event) => event.text ?? "")
+      .join("");
+    assert.match(text, new RegExp(`${marker}-after`));
+    assert.match(text, new RegExp(`${marker}-independent`));
+    const assembled = events.find(
+      (event) =>
+        event.runId === before.runId &&
+        event.text?.includes("Cookie: [REDACTED]"),
+    );
+    assert.ok(assembled.textFromCursor < assembled.id);
+    assert.ok(
+      events.some(
+        (event) =>
+          event.id === assembled.textFromCursor &&
+          event.runId === assembled.runId &&
+          event.taskId === assembled.taskId,
+      ),
+    );
+    assert.match(text, /Cookie: \[REDACTED\]/);
+    assert.match(text, /Authorization: \[REDACTED\]/);
+    assert.ok(!text.includes(`${marker === "gem" ? "restart" : "gem"}-after`));
+  }
+  assert.equal(summary.outcome, "awaiting-human-review");
+});
+
+test("oversized and interrupted output lines are omitted without exposing their continuations", async (t) => {
+  const f = await fixture(t);
+  await f.run(
+    [
+      "--live",
+      "--fixture",
+      "--executable",
+      resolve("tests/fixtures/evaluation-codex.mjs"),
+      "--deadline-ms",
+      "1500",
+    ],
+    {
+      ORCHES_EVAL_USERNAME: "evaluator",
+      ORCHES_EVAL_PASSWORD: "test-password-123",
+      EVALUATION_FIXTURE: "bounded-text",
+    },
+  );
+  const summary = await f.summary();
+  const artifact = await readFile(join(f.output, "events.ndjson"), "utf8");
+  assert.doesNotMatch(
+    artifact,
+    /oversized-secret|oversized-continuation-secret|cancel-tail-secret/,
+  );
+  const events = artifact.trim().split("\n").map(JSON.parse);
+  assert.equal(summary.termination, "deadline");
+  assert.equal(summary.evidence.missing, true);
+  assert.equal(summary.phases.output, "incomplete");
+  for (const run of summary.runs) {
+    const own = events.filter((event) => event.runId === run.id);
+    assert.ok(
+      own.some((event) => event.text?.includes("retained-after-oversize")),
+    );
+    assert.ok(own.some((event) => event.textOmitted?.includes("Oversized")));
+    assert.ok(own.some((event) => event.textOmitted?.includes("interruption")));
+    assert.ok(summary.evidence.affectedRuns.includes(run.id));
+  }
+});
+test("proxy rejection split across output deltas remains attributed and blocked", async (t) => {
+  const f = await fixture(t);
+  await f.run(
+    [
+      "--live",
+      "--fixture",
+      "--executable",
+      resolve("tests/fixtures/evaluation-codex.mjs"),
+      "--deadline-ms",
+      "1500",
+    ],
+    {
+      ORCHES_EVAL_USERNAME: "evaluator",
+      ORCHES_EVAL_PASSWORD: "test-password-123",
+      EVALUATION_FIXTURE: "split-proxy",
+    },
+  );
+  const summary = await f.summary();
+  assert.equal(summary.outcome, "blocked");
+  assert.equal(summary.phases.connectivity, "blocked");
+  for (const run of summary.runs) {
+    assert.equal(run.connectivity, "blocked");
+    assert.match(run.connectivityBlocker, /CONNECT 403/);
+  }
+});
+
+test("stream limit omissions stay private after another run completes and frees buffers", async (t) => {
+  const f = await fixture(t);
+  await f.run(
+    [
+      "--live",
+      "--fixture",
+      "--executable",
+      resolve("tests/fixtures/evaluation-codex.mjs"),
+      "--deadline-ms",
+      "5000",
+    ],
+    {
+      ORCHES_EVAL_USERNAME: "evaluator",
+      ORCHES_EVAL_PASSWORD: "test-password-123",
+      EVALUATION_FIXTURE: "stream-limit",
+    },
+  );
+  const summary = await f.summary();
+  const artifact = await readFile(join(f.output, "events.ndjson"), "utf8");
+  assert.doesNotMatch(
+    artifact,
+    /stream-limit-secret|stream-limit-continuation/,
+  );
+  assert.match(artifact, /stream limit exceeded/);
+  assert.equal(summary.evidence.missing, true);
+  assert.equal(summary.outcome, "incomplete-evidence");
+  assert.equal(summary.runs.length, 2);
+  assert.ok(summary.runs.every((run) => run.state === "completed"));
+});
+test("an event-stream EOF omits buffered secret tails and reports incomplete evidence", async (t) => {
+  const f = await fixture(t);
+  await f.run(
+    [
+      "--live",
+      "--fixture",
+      "--executable",
+      resolve("tests/fixtures/evaluation-codex.mjs"),
+      "--deadline-ms",
+      "5000",
+    ],
+    {
+      ORCHES_EVAL_USERNAME: "evaluator",
+      ORCHES_EVAL_PASSWORD: "test-password-123",
+      EVALUATION_FIXTURE: "bounded-text",
+      NODE_OPTIONS: `--import=${resolve("tests/fixtures/evaluation-ended-events.mjs")}`,
+    },
+  );
+  const summary = await f.summary();
+  const artifact = await readFile(join(f.output, "events.ndjson"), "utf8");
+  assert.doesNotMatch(
+    artifact,
+    /oversized-secret|oversized-continuation-secret|cancel-tail-secret/,
+  );
+  assert.equal(summary.termination, "event-stream-ended");
+  assert.equal(summary.evidence.missing, true);
+  assert.equal(summary.phases.output, "incomplete");
+  assert.ok(summary.evidence.affectedRuns.length > 0);
+  for (const run of summary.runs)
+    assert.ok(["cancelled", "interrupted"].includes(run.state));
+});
