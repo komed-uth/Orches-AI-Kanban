@@ -17,7 +17,10 @@ function deferred() {
   return { promise, resolve, reject };
 }
 
-async function fixture(t, { externalHost = false } = {}) {
+async function fixture(
+  t,
+  { externalHost = false, crashAfterWorktreeCreation = false } = {},
+) {
   const root = await mkdtemp(join(tmpdir(), "orches-execution-"));
   const repo = join(root, "source");
   await mkdir(repo);
@@ -33,6 +36,15 @@ async function fixture(t, { externalHost = false } = {}) {
   await writeFile(join(repo, "shared.txt"), "original\n");
   execFileSync("git", ["-C", repo, "add", "."]);
   execFileSync("git", ["-C", repo, "commit", "-qm", "initial"]);
+  const bin = join(root, "bin");
+  if (crashAfterWorktreeCreation) {
+    await mkdir(bin);
+    await writeFile(
+      join(bin, "git"),
+      '#!/bin/sh\n/usr/bin/git "$@"\nresult=$?\ncase " $* " in *" worktree add "*) if [ "$result" = 0 ]; then printf "retained orphan change\\n" > "$7/orphan-partial.txt"; kill -KILL "$PPID"; fi;; esac\nexit "$result"\n',
+      { mode: 0o755 },
+    );
+  }
   const sessions = new Map();
   const arrivals = new Map();
   const runnerFactory = (context) => {
@@ -61,7 +73,15 @@ async function fixture(t, { externalHost = false } = {}) {
       child = fork(
         resolve("tests/fixtures/recovery-host.mjs"),
         [join(root, "data")],
-        { stdio: ["ignore", "ignore", "inherit", "ipc"] },
+        {
+          stdio: ["ignore", "ignore", "inherit", "ipc"],
+          env: {
+            ...process.env,
+            PATH: crashAfterWorktreeCreation
+              ? `${bin}:${process.env.PATH}`
+              : process.env.PATH,
+          },
+        },
       );
       const [message] = await once(child, "message");
       base = `http://127.0.0.1:${message.port}`;
@@ -172,10 +192,16 @@ async function fixture(t, { externalHost = false } = {}) {
     until,
     project,
     repo,
+    dataDir: join(root, "data"),
     sessions,
     close,
     open,
     abrupt: () => stopHost("SIGKILL"),
+    waitForCrash: async () => {
+      await once(child, "exit");
+      opened = false;
+      crashAfterWorktreeCreation = false;
+    },
   };
 }
 
@@ -219,6 +245,89 @@ test("a task streams attributed evidence, verifies actual isolated changes and r
         event.taskId === task.id &&
         event.text === "Implemented the change.",
     ),
+  );
+});
+
+test("an explicit retry adopts only its registered orphan after death during Git worktree creation", async (t) => {
+  const f = await fixture(t, {
+    externalHost: true,
+    crashAfterWorktreeCreation: true,
+  });
+  const task = await f.task("orphan recovery");
+  const stopped = f.waitForCrash();
+  await f.api(`/tasks/${task.id}/run`, {});
+  await stopped;
+  const expected = join(f.dataDir, "worktrees", task.id);
+  assert.equal(
+    await readFile(join(expected, "orphan-partial.txt"), "utf8"),
+    "retained orphan change\n",
+  );
+  await f.open();
+  const recovered = (await f.api(`/tasks/${task.id}`)).body;
+  assert.equal(recovered.runs.length, 1);
+  assert.equal(recovered.runs[0].state, "interrupted");
+  assert.equal(recovered.task.worktree, undefined);
+  await f.api(`/tasks/${task.id}/run`, {});
+  const retried = await f.until(task.id, "running");
+  assert.equal(retried.task.worktree, expected);
+  assert.equal(
+    await readFile(join(expected, "orphan-partial.txt"), "utf8"),
+    "retained orphan change\n",
+  );
+  assert.equal(
+    await readFile(join(f.repo, "shared.txt"), "utf8"),
+    "original\n",
+  );
+});
+
+test("orphan recovery rejects unrelated directories and registrations with the wrong branch or base", async (t) => {
+  const f = await fixture(t);
+  for (const kind of ["foreign-directory", "wrong-branch", "wrong-base"]) {
+    const task = await f.task(kind);
+    const expected = join(f.dataDir, "worktrees", task.id);
+    await mkdir(join(f.dataDir, "worktrees"), { recursive: true });
+    if (kind === "foreign-directory") await mkdir(expected);
+    else
+      execFileSync("git", [
+        "-C",
+        f.repo,
+        "worktree",
+        "add",
+        "-b",
+        kind === "wrong-branch" ? "unrelated-branch" : `orches/task-${task.id}`,
+        expected,
+        f.project.revision,
+      ]);
+    await writeFile(
+      join(expected, "sentinel.txt"),
+      "preserve unrelated contents\n",
+    );
+    if (kind === "wrong-base") {
+      execFileSync("git", ["-C", expected, "add", "."]);
+      execFileSync("git", [
+        "-C",
+        expected,
+        "commit",
+        "-qm",
+        "unrelated newer revision",
+      ]);
+    }
+    await f.api(`/tasks/${task.id}/run`, {});
+    const failed = await f.until(task.id, "failed");
+    assert.match(
+      failed.runs[0].error,
+      /Cannot recover task working copy safely/,
+    );
+    assert.equal(failed.task.worktree, undefined);
+    assert.equal(
+      await readFile(join(expected, "sentinel.txt"), "utf8"),
+      "preserve unrelated contents\n",
+    );
+  }
+  assert.equal(f.sessions.size, 0);
+  assert.equal(
+    await readFile(join(f.repo, "shared.txt"), "utf8"),
+    "original\n",
   );
 });
 

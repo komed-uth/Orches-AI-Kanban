@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { mkdir, access } from "node:fs/promises";
+import { mkdir, access, realpath } from "node:fs/promises";
 import { resolve } from "node:path";
 const exec = promisify(execFile);
 const git = async (cwd, args) =>
@@ -48,6 +48,73 @@ export async function ensureWorktree({ task, project, dataDir }) {
   if (!safeId) throw new Error("Task identifier is required.");
   const worktree = resolve(dataDir, "worktrees", safeId),
     branch = `orches/task-${safeId}`;
+  const registered = (
+    await git(repository.path, ["worktree", "list", "--porcelain", "-z"])
+  )
+    .split("\0\0")
+    .filter(Boolean)
+    .map((record) =>
+      Object.fromEntries(
+        record
+          .split("\0")
+          .filter(Boolean)
+          .map((field) => {
+            const space = field.indexOf(" ");
+            return space === -1
+              ? [field, true]
+              : [field.slice(0, space), field.slice(space + 1)];
+          }),
+      ),
+    );
+  const existing = registered.find(
+    (record) => resolve(record.worktree) === worktree,
+  );
+  const directoryExists = await access(worktree).then(
+    () => true,
+    () => false,
+  );
+  if (existing || directoryExists) {
+    try {
+      if (
+        !existing ||
+        existing.branch !== `refs/heads/${branch}` ||
+        existing.HEAD !== repository.commit
+      )
+        throw new Error(
+          "Unexpected worktree registration, branch, or starting revision.",
+        );
+      const commonDir = async (path) =>
+        realpath(
+          (
+            await git(path, [
+              "rev-parse",
+              "--path-format=absolute",
+              "--git-common-dir",
+            ])
+          ).trim(),
+        );
+      if (
+        (await commonDir(worktree)) !== (await commonDir(repository.path)) ||
+        (await git(worktree, ["symbolic-ref", "HEAD"])).trim() !==
+          `refs/heads/${branch}` ||
+        (await git(worktree, ["rev-parse", "HEAD"])).trim() !==
+          repository.commit ||
+        (await realpath(
+          (await git(worktree, ["rev-parse", "--show-toplevel"])).trim(),
+        )) !== (await realpath(worktree))
+      )
+        throw new Error(
+          "The working copy does not match its registered repository and branch.",
+        );
+    } catch (error) {
+      throw new Error(
+        `Cannot recover task working copy safely. Restore the expected registered path, branch, and starting revision before retrying. ${error.message}`,
+      );
+    }
+    // Git may finish creating the worktree immediately before the host dies,
+    // before its return value is persisted. Adopt only this exact registration.
+    return { worktree, branch, baseRevision: repository.commit };
+  }
   await mkdir(resolve(dataDir, "worktrees"), { recursive: true });
   try {
     await git(repository.path, [
