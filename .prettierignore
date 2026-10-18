@@ -1,0 +1,12 @@
+# The independent GitHub Pages dashboard retains its existing formatting.
+docs/
+tests/board.test.mjs
+.github/workflows/pages.yml
+
+# Generated output and host runtime data.
+node_modules/
+dist/
+.orches-data/
+playwright-report/
+test-results/
+package-lock.json
