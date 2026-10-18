@@ -1,27 +1,12 @@
-import { spawn } from "node:child_process";
+import { spawnManaged, stopProcessGroup } from "./processes.mjs";
+export { stopProcessGroup } from "./processes.mjs";
 
-// Each run owns a POSIX process group, including shells and their descendants.
-export async function stopProcessGroup(child) {
-  if (!child?.pid) return;
-  const kill = (signal) => {
-    try {
-      process.kill(-child.pid, signal);
-    } catch (error) {
-      if (error.code !== "ESRCH") throw error;
-    }
-  };
-  kill("SIGTERM");
-  await new Promise((resolve) => setTimeout(resolve, 250));
-  kill("SIGKILL");
-  if (child.exitCode === null && child.signalCode === null)
-    await new Promise((resolve) => child.once("close", resolve));
-}
 export async function runCommand(
   command,
   { cwd, tmpDir, port, signal, onOutput = () => {} } = {},
 ) {
   if (signal?.aborted) throw signal.reason || new Error("Cancelled");
-  const child = spawn(command, {
+  const child = spawnManaged(command, [], {
     cwd,
     shell: true,
     detached: true,

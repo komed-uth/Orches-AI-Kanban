@@ -90,3 +90,22 @@ test("cancellation stops a held Codex turn before the run settles", async (t) =>
   controller.abort(new Error("Chosen cancellation"));
   await assert.rejects(running, /Chosen cancellation/);
 });
+
+test("Codex diagnostics use warning logging and remain bounded", async (t) => {
+  const cwd = await mkdtemp(tmpdir() + "/protocol-");
+  t.after(() => rm(cwd, { recursive: true, force: true }));
+  const events = [];
+  await createCodexRunner({
+    run: { config: { executable } },
+    task: { title: "diagnostics" },
+    cwd,
+    onEvent: (event) => events.push(event),
+  }).run();
+  const diagnostics = events
+    .filter((event) => event.type === "diagnostic")
+    .map((event) => event.text)
+    .join("");
+  assert.match(diagnostics, /logging=warn/);
+  assert.ok(Buffer.byteLength(diagnostics) < 66000);
+  assert.match(diagnostics, /omitted after 64 KiB/);
+});
