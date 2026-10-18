@@ -1,10 +1,11 @@
 import express from 'express';
 import { randomBytes, randomUUID, scryptSync, timingSafeEqual } from 'node:crypto';
-import { existsSync, mkdirSync, cpSync, writeFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { resolve, join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { createStore } from './store.mjs';
+import { seedSampleProject } from './sample.mjs';
 
 const root=resolve(dirname(fileURLToPath(import.meta.url)),'..');
 export const defaultStatuses=()=>['Backlog','Ready','In Progress','Review','Done','Blocked'].map((name,i)=>({id:['backlog','ready','progress','review','done','blocked'][i],name,kind:['backlog','ready','execution','review','done','blocked'][i]}));
@@ -14,17 +15,13 @@ const passwordHash=password=>{const salt=randomBytes(16).toString('hex');return 
 const validPassword=(password,hash)=>{const [salt,digest]=hash.split(':');return timingSafeEqual(Buffer.from(digest,'hex'),scryptSync(password,salt,64));};
 const credentials=body=>{if(typeof body.username!=='string'||!/^[\w.-]{2,40}$/.test(body.username)||typeof body.password!=='string'||body.password.length<10||body.password.length>256)fail(400,'Use a 2–40 character username and password of at least 10 characters.');};
 function projectDefaults(record){return {...record,statuses:defaultStatuses(),rule:{enabled:false,triggerStatus:'ready',reviewStatus:'review',instructions:'',buildCommand:record.buildCommand??'',testCommand:record.testCommand??'node --test'}};}
-function seed(store,dataDir){
+async function seed(store,dataDir){
  if(store.state.projects.length)return;
- const path=join(resolve(dataDir),'sample-project');mkdirSync(path,{recursive:true});
- if(existsSync(join(root,'sample-game')))cpSync(join(root,'sample-game'),path,{recursive:true});
- else {writeFileSync(join(path,'README.md'),'# Sample game\nA small game project.\n');writeFileSync(join(path,'game.mjs'),'export const score = 0;\n');}
- const git=(args)=>execFileSync('git',['-C',path,...args],{encoding:'utf8',stdio:['ignore','pipe','pipe']}).trim();
- if(!existsSync(join(path,'.git'))){git(['init']);git(['add','.']);git(['-c','user.name=Orches Sample','-c','user.email=sample@localhost','commit','-m','Seed sample game']);}
- store.transaction(state=>{const project=projectDefaults({id:randomUUID(),name:'Sample game',path,revision:git(['rev-parse','HEAD']),buildCommand:'',testCommand:'node --test'});state.projects.push(project);for(const title of ['Add a score counter','Add keyboard controls'])state.tasks.push({id:randomUUID(),projectId:project.id,title,description:'An independent sample programming task.',acceptanceCriteria:'Add the feature and automated tests.',discipline:'programming',priority:'medium',assigneeId:null,statusId:'backlog',messages:[]});});
+ const {tasks,...configuration}=await seedSampleProject(dataDir);
+ store.transaction(state=>{const project=projectDefaults({id:randomUUID(),...configuration});state.projects.push(project);for(const definition of tasks)state.tasks.push({id:randomUUID(),projectId:project.id,description:'',acceptanceCriteria:'',discipline:'programming',priority:'medium',assigneeId:null,...definition,statusId:'backlog',messages:[]});});
 }
 export async function createApplication({dataDir=resolve('.orches-data'),runnerFactory,schedulerFactory}={}){
- const store=createStore(dataDir);seed(store,dataDir);
+ const store=createStore(dataDir);await seed(store,dataDir);
  let scheduler;
  if(schedulerFactory)scheduler=await schedulerFactory({store,dataDir,runnerFactory});
  else if(existsSync(join(root,'server/scheduler.mjs'))) {try {const {createScheduler}=await import('./scheduler.mjs');scheduler=await createScheduler({store,dataDir,runnerFactory});}catch(error){if(error.code!=='ERR_MODULE_NOT_FOUND')throw error;}}

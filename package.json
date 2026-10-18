@@ -6,7 +6,7 @@
     "node": ">=22.13"
   },
   "scripts": {
-    "test": "node --test tests/*.test.mjs",
+    "test": "node --test tests/*.test.mjs sample-game/tests/*.test.mjs",
     "build": "vite build",
     "dev": "node server/index.mjs",
     "start": "node server/index.mjs",
