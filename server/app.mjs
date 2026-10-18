@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { createStore } from './store.mjs';
 import { seedSampleProject } from './sample.mjs';
+import { inspectCodexHost } from './codex.mjs';
 
 const root=resolve(dirname(fileURLToPath(import.meta.url)),'..');
 export const defaultStatuses=()=>['Backlog','Ready','In Progress','Review','Done','Blocked'].map((name,i)=>({id:['backlog','ready','progress','review','done','blocked'][i],name,kind:['backlog','ready','execution','review','done','blocked'][i]}));
@@ -48,8 +49,8 @@ export async function createApplication({dataDir=resolve('.orches-data'),runnerF
   const fields={};for(const key of ['title','description','acceptanceCriteria','discipline','priority','assigneeId'])if(Object.hasOwn(body,key))fields[key]=body[key];
   for(const key of ['title','description','acceptanceCriteria'])if(Object.hasOwn(fields,key)&&(typeof fields[key]!=='string'||fields[key].length>50000))fail(400,`Invalid ${key}.`);
   if(Object.hasOwn(fields,'title')&&!fields.title.trim())fail(400,'Task title is required.');
-  if(fields.discipline&&!['programming','qa','design','art','animation','audio'].includes(fields.discipline))fail(400,'Unknown discipline.');
-  if(fields.priority&&!['low','medium','high','urgent'].includes(fields.priority))fail(400,'Unknown priority.');
+  if(Object.hasOwn(fields,'discipline')&&!['programming','qa','design','art','animation','audio'].includes(fields.discipline))fail(400,'Unknown discipline.');
+  if(Object.hasOwn(fields,'priority')&&!['low','medium','high','urgent'].includes(fields.priority))fail(400,'Unknown priority.');
   if(fields.assigneeId!==undefined&&fields.assigneeId!==null&&!store.state.users.some(x=>x.id===fields.assigneeId))fail(400,'Unknown assignee.');
   if(body.statusId!==undefined&&!project.statuses.some(x=>x.id===body.statusId))fail(400,'Unknown project status.');
   return fields;
@@ -74,7 +75,7 @@ export async function createApplication({dataDir=resolve('.orches-data'),runnerF
   if(!rule||typeof rule.enabled!=='boolean'||typeof rule.instructions!=='string'||typeof rule.buildCommand!=='string'||typeof rule.testCommand!=='string'||!rule.testCommand.trim()||!statuses.some(x=>x.id===rule.triggerStatus&&['backlog','ready','custom'].includes(x.kind))||!statuses.some(x=>x.id===rule.reviewStatus&&x.kind==='review'))fail(400,'Rule needs a valid start status, human Review destination, instructions, and test command.');
   store.transaction(()=>{project.statuses=statuses.map(({id,name,kind})=>({id,name:name.trim(),kind}));project.rule={enabled:rule.enabled,triggerStatus:rule.triggerStatus,reviewStatus:rule.reviewStatus,instructions:rule.instructions,buildCommand:rule.buildCommand,testCommand:rule.testCommand};store.event('workflow.updated',{projectId:project.id});});res.json({project});
  });
- app.get('/api/health',owner,async(req,res)=>{let installed=false,loggedIn=false,version='',message='';const executable=store.state.settings.executable;try{version=execFileSync(executable,['--version'],{encoding:'utf8',timeout:5000,stdio:['ignore','pipe','pipe']}).trim();installed=true;try{const status=execFileSync(executable,['login','status'],{encoding:'utf8',timeout:5000,stdio:['ignore','pipe','pipe']}).trim();loggedIn=/logged in|authenticated/i.test(status);message=loggedIn?'CLI login detected. Model connectivity has not been tested.':'Codex login was not detected. Run codex login on the host.';}catch{message='Codex login unavailable. Run codex login on the host.';}}catch{message='Codex executable is missing or cannot run. Install Codex CLI or correct the executable path.';}res.json({installed,loggedIn,version,message,modelConnectivity:'unverified',runner:store.state.settings.runner});});
+ app.get('/api/health',owner,async(req,res)=>{const health=await inspectCodexHost(store.state.settings);res.json({...health,message:health.message??'CLI login detected. Model connectivity has not been tested.',modelConnectivity:'unverified',runner:store.state.settings.runner});});
  app.get('/api/settings',(req,res)=>res.json({settings:store.state.settings}));
  app.use('/sample-game',express.static(join(root,'sample-game')));
  if(existsSync(join(root,'dist'))) {app.use(express.static(join(root,'dist')));app.get(/^(?!\/api).*/,(req,res)=>res.sendFile(join(root,'dist/index.html')));}

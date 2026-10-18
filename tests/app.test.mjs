@@ -69,7 +69,7 @@ test('runner mode cannot be mislabeled and health explains a missing Codex execu
  const dataDir=await mkdtemp(join(tmpdir(),'orches-health-'));const application=await createApplication({dataDir});const server=application.app.listen(0,'127.0.0.1');await new Promise(r=>server.once('listening',r));const base=`http://127.0.0.1:${server.address().port}`;
  try {const setup=await fetch(base+'/api/setup',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({username:'owner',password:'long-password'})});const cookie=setup.headers.get('set-cookie').split(';')[0];const headers={cookie,'content-type':'application/json'};
  assert.equal((await fetch(base+'/api/settings',{method:'PATCH',headers,body:JSON.stringify({runner:'demo'})})).status,400);
- await fetch(base+'/api/settings',{method:'PATCH',headers,body:JSON.stringify({executable:'/missing-codex'})});const health=await (await fetch(base+'/api/health',{headers})).json();assert.equal(health.installed,false);assert.equal(health.modelConnectivity,'unverified');assert.match(health.message,/missing/);
+ await fetch(base+'/api/settings',{method:'PATCH',headers,body:JSON.stringify({executable:'/missing-codex'})});const health=await (await fetch(base+'/api/health',{headers})).json();assert.equal(health.installed,false);assert.equal(health.modelConnectivity,'unverified');assert.match(health.message,/Install Codex/);
  }finally{await application.close();await rm(dataDir,{recursive:true,force:true});}
 });
 
