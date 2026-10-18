@@ -29,17 +29,11 @@ const redact = (value) =>
       (text, secret) => text.split(secret).join("[REDACTED]"),
       String(value),
     )
+    // Treat authentication fields as opaque through the line boundary. Header
+    // values may contain quotes (Cookie/Digest) or escaped quotes inside JSON;
+    // stopping at one of those quotes would export the remaining secret.
     .replace(
-      /(\\?["'](?:authorization|(?:set-)?cookie|orches_session|password|token|api[_-]?key)\\?["']\s*:\s*)(\\?["'])([\s\S]*?)\2/gi,
-      "$1$2[REDACTED]$2",
-    )
-    .replace(
-      /((?:authorization|(?:set-)?cookie)\s*:\s*)[^\r\n\"]+/gi,
-      "$1[REDACTED]",
-    )
-    .replace(/(orches_session\s*=\s*)[^;\s\"]+/gi, "$1[REDACTED]")
-    .replace(
-      /(authorization\s*:\s*(?:bearer\s+)?|cookie\s*:\s*|(?:password|token|api[_-]?key)\s*[=:]\s*)[^\s\";,]+/gi,
+      /((?:\\?["'])?(?:authorization|(?:set-)?cookie|orches_session|password|token|api[_-]?key)(?:\\?["'])?\s*[:=]\s*)[^\r\n]*/gi,
       "$1[REDACTED]",
     );
 const summary = {
@@ -214,16 +208,25 @@ if (Buffer.byteLength(serialized) > 65536) {
     }) + "\n";
 }
 await writeFile(join(output, "summary.json"), serialized, { mode: 0o600 });
-console.log(
-  JSON.stringify(
-    sanitize({
-      mode: summary.mode,
-      outcome: summary.outcome,
-      host: summary.host,
-      phases: summary.phases,
-      blocker: summary.blocker?.slice(0, 512),
-      artifact: join(output, "summary.json").slice(0, 1024),
-    }),
-  ),
+let consoleSummary = JSON.stringify(
+  sanitize({
+    mode: summary.mode,
+    outcome: summary.outcome,
+    host: summary.host,
+    phases: summary.phases,
+    blocker: summary.blocker?.slice(0, 512),
+    artifact: join(output, "summary.json").slice(0, 1024),
+  }),
 );
+// Apply the console bound after serialization: escaping and UTF-8 can expand
+// character-limited paths or diagnostics beyond the promised byte budget.
+if (Buffer.byteLength(consoleSummary) + 1 >= 4096)
+  consoleSummary = JSON.stringify({
+    mode: summary.mode,
+    outcome: summary.outcome,
+    phases: summary.phases,
+    artifact: "summary.json in the requested output directory",
+    consoleTruncated: true,
+  });
+console.log(consoleSummary);
 process.exitCode = summary.outcome === "diagnostic-ready" ? 0 : 2;
