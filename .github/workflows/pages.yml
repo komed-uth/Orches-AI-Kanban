@@ -1,0 +1,61 @@
+name: Publish task dashboard
+
+on:
+  push:
+    branches: [main]
+  issues:
+    types: [opened, edited, deleted, closed, reopened, assigned, unassigned, labeled, unlabeled, transferred]
+  label:
+    types: [edited]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: Test board rules
+        run: node --test tests/*.test.mjs
+      - name: Export public issues
+        uses: actions/github-script@v7
+        with:
+          script: |
+            if (context.payload.repository.private) {
+              throw new Error('This workflow publishes public issue data. Private repositories require a separate visibility review.');
+            }
+            const issues = await github.paginate(github.rest.issues.listForRepo, {
+              ...context.repo, state: 'all', per_page: 100,
+              sort: 'updated', direction: 'desc'
+            });
+            const snapshot = {
+              generated_at: new Date().toISOString(),
+              issues: issues.filter(issue => !issue.pull_request).map(issue => ({
+                number: issue.number, title: issue.title, state: issue.state,
+                updated_at: issue.updated_at,
+                labels: issue.labels.map(label => ({ name: typeof label === 'string' ? label : label.name })),
+                assignees: issue.assignees.map(user => ({ login: user.login }))
+              }))
+            };
+            require('node:fs').writeFileSync('docs/issues.json', JSON.stringify(snapshot));
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v4
