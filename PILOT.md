@@ -9,12 +9,12 @@ Supported pilot host: Linux. Process-group supervision uses POSIX signals; Windo
 From the repository root:
 
 ```sh
-npm install
+npm ci
 npm run build
 npm start
 ```
 
-Open the localhost URL printed by the server. Create the first owner account in the setup form. For application development use `npm run dev`; it builds the browser client before starting a server that watches backend files. Rebuild after client edits. The production flow above serves the built client. Run checks with `npm test` and `npm run build`. For browser checks, run `npx playwright install chromium` and `npm run test:browser`. The sample's independent baseline is `node --test sample-game/tests/*.test.mjs` from the application repository, or `node --test tests/*.test.mjs` from the seeded game repository.
+Open the localhost URL printed by the server. Create the first owner account in the setup form. For application development use `npm run dev`; it builds the browser client before starting a server that watches backend files. Rebuild after client edits. The production flow above serves the built client. Run contributor checks with `npm test`, the read-only `npm run format:check`, and `npm run build`. `npm test` checks required host capabilities and requires per-file test-body execution evidence; a successful file wrapper alone is insufficient. It uses controlled external processes and does not call a model. Use `npm run format` to apply the pinned formatter to application sources and tooling/tests; the independent Pages surface is excluded. See [module ownership](contributor/architecture.md) and the conditional [review reference](contributor/review.md). For browser checks, run `npx playwright install chromium` and `npm run test:browser`. The sample's independent baseline is `node --test sample-game/tests/*.test.mjs` from the application repository, or `node --test tests/*.test.mjs` from the seeded game repository.
 
 The server binds localhost by default. To permit a small trusted team to connect, deliberately set `HOST=0.0.0.0` and a `PORT`, then use the host's trusted LAN address. Restrict access with the host firewall or a trusted VPN. Local account cookies over plain HTTP do not provide transport encryption; use a trusted TLS reverse proxy when needed. This pilot is not configured for public internet hosting. Team members use invitations created by the owner and shared manually; Codex authentication stays on the host. Members can manage tasks, respond to requests, and review work; owner settings control repositories and executable commands.
 
@@ -76,4 +76,74 @@ For any blocked item include the exact command or operation, observed error, and
 
 The real attempt used the two seeded tasks and independent worktrees. Run IDs were `82f17105-9b34-4e68-83ee-e3d4e4aa571b` and `6a62c359-d2b8-4a31-8351-75c134711d46`; both reached Running with distinct Codex conversations. The proxy reported `HTTP CONNECT failed with status 403` for `wss://chatgpt.com/backend-api/codex/responses`, followed by `Reconnecting... waiting for network`. Both were stopped after a two-minute observation window, retaining interrupted history. The initial attempt also exposed a read-only Codex runtime directory; a scoped write grant allowed initialization on the second attempt. No proxy bypass or replacement credentials were used.
 
-Issue #1 remains open: successful overlapping real-model edits, configured verification, resumed follow-up context, and human acceptance still need evaluation on a host permitted to reach the model service. The app's repeatable verification paths passed with fixtures; the live loop has not been claimed as verified.
+[Issue #1](https://github.com/komed-uth/Orches-AI-Kanban/issues/1) is closed. Remaining live validation is tracked in [issue #17](https://github.com/komed-uth/Orches-AI-Kanban/issues/17): successful overlapping real-model edits, configured verification, resumed follow-up context, and human acceptance still need evaluation on a host permitted to reach the model service. The app's repeatable verification paths passed with fixtures; the live loop has not been claimed as verified.
+
+## Repeatable host diagnostics and live evidence
+
+`npm run evaluate -- --data-dir /absolute/runtime --output /absolute/evidence`
+checks Linux/Node support, required Git worktree support (Git 2.5+ on PATH), the configured Codex installation and host login via the
+application's readiness helper, and writability of the application runtime,
+`CODEX_HOME` (default `~/.codex`), and the normal temporary directory. It reads no
+credential contents, starts no application/task processes, and calls no model.
+Installation/login, runtime initialization, and model connectivity are separate
+results: diagnostics always leave connectivity **unverified**. Select the runtime
+with `--data-dir` or `ORCHES_DATA_DIR`; the default is `.orches-data`. Its saved
+executable is used unless `--executable /absolute/codex` overrides it.
+
+For an explicitly authorized model attempt, stop any application using that runtime
+and choose a dedicated runtime containing the two seeded sample tasks:
+
+```sh
+export ORCHES_EVAL_USERNAME=evaluator
+read -rs ORCHES_EVAL_PASSWORD
+export ORCHES_EVAL_PASSWORD
+npm run evaluate -- --live --data-dir /absolute/evaluation-runtime --output /absolute/new-evidence --deadline-ms 60000
+```
+
+For a new runtime these credentials create its owner through authenticated setup;
+for a retained runtime they must match its existing account. The command owns a
+loopback application instance, uses its authenticated HTTP operations, ordered
+live events, scheduler, and Codex adapter, and starts one attempt for each seeded
+task with capacity of at least two. It inherits host identity, Codex configuration,
+and supported proxy environment; it never replaces credentials or changes network
+policy. Use a new evidence directory per attempt; existing output directories are rejected before any artifact is written. Existing active runs block the
+command before application initialization; don't run this alongside another host.
+A stopped runtime with interrupted/failed attempts can be inspected and deliberately
+retried by rerunning the command. Working copies and review branches are retained.
+
+The default live deadline is 60 seconds; `--deadline-ms` accepts 100–1,800,000 ms.
+At deadline, SIGINT, or SIGTERM, the command cancels its attempts and waits for the
+application's process-group cleanup and Git evidence capture before closing its
+listener. The event collector remains active through cleanup and drains to the final persisted cursor; a drain failure records missing evidence explicitly. Cleanup may extend beyond the model-execution deadline. Proxy rejections
+are reported as **blocked**, not successful connectivity. The summary identifies
+actual run states, observed concurrency, conversation/working-copy/review-branch
+references, verification results, and incomplete phases. It never grants approval
+requests or accepts a deliverable. Conversation resume, task independence, and
+human acceptance still require deliberate evaluation/review through the application;
+the initial two-task command alone does not establish those acceptance criteria.
+
+`summary.json` and `events.ndjson` are the shareable evidence export. Events are
+collected once after the persisted event cursor, with task/run identity and no
+repeated historical snapshots. The export is capped at **1 MiB total**, reserving
+64 KiB for the summary; each recorded event is at most 8 KiB. Console reporting is
+under 4 KiB. Oversized/missing events and exhausted storage are recorded explicitly,
+including affected runs when identifiable, and make evidence incomplete. The
+adapter retains its separate 64 KiB diagnostic cap per run. Exported text redacts
+authentication headers, session cookies, and configured secret values. Output deltas
+are buffered by run and item (or the run's unclassified stream) until a complete
+line can be sanitized; ordered event metadata is written immediately. A completed
+line is attached to its completing event with `textFromCursor` identifying its
+first source event. At most 64 streams and 8,192 characters per pending line are
+retained. Oversized lines are omitted through their newline; exceeding the stream
+limit suppresses further text for that run. Unterminated tails flush on normal
+completion, while interrupted or abruptly ended streams omit their tails. These
+omissions mark affected evidence incomplete. The retained
+runtime database and working copies are operational state, not part of that bounded
+export; keep them private rather than sharing them as evidence.
+
+A healthy diagnostic exits 0. Blocked or incomplete evaluation exits 2, including
+verified tasks awaiting human review. No live result from this command automatically
+passes human acceptance. Controlled tests use `--live --fixture` with a fixture
+executable; summaries and every exported event are labeled **synthetic-fixture**,
+and connectivity is **synthetic-only**. Fixture success does not satisfy real-model
+validation in [#17](https://github.com/komed-uth/Orches-AI-Kanban/issues/17).

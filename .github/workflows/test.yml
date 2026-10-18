@@ -2,7 +2,7 @@ name: Application checks
 on:
   pull_request:
   push:
-    branches: [main, feat/self-hosted-orchestration]
+    branches: [main]
 permissions:
   contents: read
 jobs:
@@ -15,7 +15,19 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
-      - run: npm test
+      - run: npm run format:check
+      - id: tests
+        shell: bash
+        run: npm test 2>&1 | tee "$RUNNER_TEMP/contributor-tests.log"
+      - name: Expose contributor failure diagnostics
+        if: failure() && steps.tests.outcome == 'failure'
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs';
+          const log = readFileSync(`${process.env.RUNNER_TEMP}/contributor-tests.log`, 'utf8');
+          const message = log.slice(-3500).replaceAll('%', '%25').replaceAll('\r', '%0D').replaceAll('\n', '%0A');
+          console.log(`::error title=Contributor test failure::${message}`);
+          NODE
       - run: npm run build
       - run: npx playwright install --with-deps chromium
       - run: npm run test:browser

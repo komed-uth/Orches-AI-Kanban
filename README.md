@@ -43,4 +43,6 @@ gh issue close 12 --repo komed-uth/Orches-AI-Kanban
 
 ## Development checks
 
-Run `node --test tests/*.test.mjs` with Node.js 20 or newer. The app uses native browser modules and has no build step. `docs/issues.json` is generated during deployment and is not committed. For a local functional check, create a fixture snapshot in that location and serve `docs` through any static HTTP server. The deployed dashboard runs entirely on GitHub Pages.
+For the self-hosted application, use Linux and Node.js **22.13 or newer**, then `npm ci`, `npm test`, `npm run format:check`, and `npm run build`. `npm test` is the canonical contributor check; see [PILOT.md](PILOT.md) for browser checks and host/live evaluation, and [contributor/architecture.md](contributor/architecture.md) for module ownership. Run `npm run format` to apply the pinned formatter to application sources and associated tooling/tests. The independent Pages files and board-only test are excluded.
+
+For the independent Pages dashboard only, run `node --test tests/board.test.mjs`. This dashboard uses native browser modules and has no build step. `docs/issues.json` is generated during deployment and is not committed. For a local functional check, create a fixture snapshot in that location and serve `docs` through any static HTTP server. The deployed dashboard runs entirely on GitHub Pages.
