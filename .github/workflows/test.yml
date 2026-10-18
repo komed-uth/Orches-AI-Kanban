@@ -25,7 +25,7 @@ jobs:
           node --input-type=module <<'NODE'
           import { readFileSync } from 'node:fs';
           const log = readFileSync(`${process.env.RUNNER_TEMP}/contributor-tests.log`, 'utf8');
-          const message = log.slice(-16000).replaceAll('%', '%25').replaceAll('\r', '%0D').replaceAll('\n', '%0A');
+          const message = log.slice(-3500).replaceAll('%', '%25').replaceAll('\r', '%0D').replaceAll('\n', '%0A');
           console.log(`::error title=Contributor test failure::${message}`);
           NODE
       - run: npm run build
