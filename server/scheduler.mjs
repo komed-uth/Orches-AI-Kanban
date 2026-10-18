@@ -168,18 +168,20 @@ export function createScheduler({
   }
   async function capture(run) {
     const task = taskById(run.taskId);
-    if (!task.worktree) return;
+    if (!task.worktree) return false;
     try {
       const changes = await collectChanges({ task });
       store.transaction(() => {
-        Object.assign(run, changes);
+        Object.assign(run, changes, { evidenceError: null });
         event("run.evidence", task, run, changes);
       });
+      return true;
     } catch (error) {
       store.transaction(() => {
         run.evidenceError = error.message;
         event("run.evidence-error", task, run, { text: error.message });
       });
+      return false;
     }
   }
   function log(run, value) {
@@ -299,7 +301,9 @@ export function createScheduler({
           "Verification failed. Inspect the recorded build/test command output before retrying.",
         );
       if (control.signal.aborted) throw new Error("Attempt stopped.");
-      await capture(run);
+      if (!(await capture(run)))
+        throw new Error("Cannot collect Git review evidence. Restore the task working copy before retrying.");
+      if (control.signal.aborted) throw new Error("Attempt stopped.");
       store.transaction(() => {
         changeState(run, "completed", {
           finishedAt: now(),

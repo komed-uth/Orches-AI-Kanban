@@ -628,3 +628,17 @@ test("restart retains interrupted work, conversations and queue evidence without
   assert.equal(completed.runs[0].state, "interrupted");
   assert.equal((await f.api(`/tasks/${queued.id}`)).body.runs.length, 1);
 });
+
+test('a task cannot enter Review when its actual Git evidence is unavailable', async (t) => {
+  const f = await fixture(t);
+  const task = await f.task('missing evidence');
+  await f.api(`/tasks/${task.id}/run`, {});
+  const session = await f.started(task.id);
+  await rm(join(session.cwd, '.git'));
+  session.gate.resolve();
+  const failed = await f.until(task.id, 'failed');
+  assert.equal(failed.task.statusId, 'blocked');
+  assert.match(failed.runs[0].error, /evidence/i);
+  assert.ok(failed.runs[0].evidenceError);
+  assert.equal((await f.api(`/tasks/${task.id}/accept`, {})).status, 409);
+});
