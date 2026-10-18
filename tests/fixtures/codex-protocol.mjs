@@ -12,6 +12,10 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
     send({ id: m.id, result: { thread: { id: threadId } } });
   } else if (m.method === "turn/start") {
     mode = m.params.input[0].text;
+    if (mode.includes("diagnostics"))
+      process.stderr.write(
+        "logging=" + process.env.RUST_LOG + "\n" + "x".repeat(100000),
+      );
     send({ id: m.id, result: { turn: { id: "turn", status: "inProgress" } } });
     send({
       method: "item/agentMessage/delta",

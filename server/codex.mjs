@@ -1,7 +1,7 @@
-import { spawn, execFile } from "node:child_process";
+import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import readline from "node:readline";
-import { stopProcessGroup } from "./verification.mjs";
+import { spawnManaged, stopProcessGroup } from "./processes.mjs";
 
 export function createCodexRunner({
   run = {},
@@ -142,7 +142,7 @@ export function createCodexRunner({
     async run() {
       if (signal?.aborted) throw signal.reason || new Error("Cancelled");
       const config = run.config || {};
-      child = spawn(
+      child = spawnManaged(
         config.executable || "codex",
         ["app-server", "--listen", "stdio://"],
         {
@@ -150,6 +150,7 @@ export function createCodexRunner({
           detached: true,
           env: {
             ...process.env,
+            RUST_LOG: "warn",
             ...(tmpDir ? { TMPDIR: tmpDir, TMP: tmpDir, TEMP: tmpDir } : {}),
             ...(port ? { PORT: String(port) } : {}),
           },
@@ -165,9 +166,21 @@ export function createCodexRunner({
           void stop();
         }
       });
-      child.stderr.on("data", (data) =>
-        onEvent({ type: "diagnostic", text: data.toString() }),
-      );
+      let diagnosticBytes = 0;
+      const diagnosticLimit = 64 * 1024;
+      child.stderr.on("data", (data) => {
+        if (diagnosticBytes >= diagnosticLimit) return;
+        const text = data
+          .subarray(0, diagnosticLimit - diagnosticBytes)
+          .toString();
+        diagnosticBytes += Buffer.byteLength(text);
+        onEvent({ type: "diagnostic", text });
+        if (diagnosticBytes >= diagnosticLimit)
+          onEvent({
+            type: "diagnostic",
+            text: "Further Codex diagnostics omitted after 64 KiB.\n",
+          });
+      });
       child.on("error", (error) =>
         fatal(new Error(`Cannot start Codex executable: ${error.message}`)),
       );
