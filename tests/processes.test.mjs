@@ -22,7 +22,8 @@ test("host SIGKILL terminates an isolated writer that ignores SIGTERM", async (t
       const stat = await readFile(`/proc/${pid}/stat`, "utf8");
       return stat.split(" ")[2] !== "Z";
     } catch (error) {
-      if (error.code === "ENOENT") return false;
+      // /proc may disappear either before open (ENOENT) or during read (ESRCH).
+      if (["ENOENT", "ESRCH"].includes(error.code)) return false;
       throw error;
     }
   };
