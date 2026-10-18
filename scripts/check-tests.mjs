@@ -97,6 +97,28 @@ async function preflight() {
   );
 }
 
+const countNames = [
+  "tests",
+  "passed",
+  "failed",
+  "cancelled",
+  "skipped",
+  "todo",
+];
+function successfulCounts(summary) {
+  const counts = summary?.counts;
+  return (
+    summary?.success === true &&
+    counts &&
+    countNames.every(
+      (name) => Number.isSafeInteger(counts[name]) && counts[name] >= 0,
+    ) &&
+    counts.failed === 0 &&
+    counts.cancelled === 0 &&
+    counts.tests === counts.passed + counts.skipped + counts.todo
+  );
+}
+
 async function verifyEvidence(file, selected) {
   const records = (await readFile(file, "utf8"))
     .trim()
@@ -107,10 +129,11 @@ async function verifyEvidence(file, selected) {
     throw new Error("Incomplete execution evidence (reporter did not finish).");
   const summaries = records.filter((record) => record.type === "test:summary");
   const overall = summaries.filter((record) => !record.data.file);
-  if (overall.length !== 1 || overall[0].data.success !== true)
+  if (overall.length !== 1 || !successfulCounts(overall[0].data))
     throw new Error("Missing or unsuccessful overall execution summary.");
   if (records.some((record) => record.type === "test:fail"))
     throw new Error("Test failures reported in execution evidence.");
+  const totals = Object.fromEntries(countNames.map((name) => [name, 0]));
   for (const selectedFile of selected) {
     const absolute = path.resolve(root, selectedFile);
     const completed = summaries.filter(
@@ -136,15 +159,18 @@ async function verifyEvidence(file, selected) {
       );
     }
     const counts = completed[0].data.counts;
-    if (
-      !counts ||
-      counts.tests < 1 ||
-      counts.failed !== 0 ||
-      counts.cancelled !== 0
-    ) {
+    if (!successfulCounts(completed[0].data) || counts.passed < bodies.length) {
       throw new Error(`Incomplete or failed execution for ${selectedFile}.`);
     }
+    for (const name of countNames) totals[name] += counts[name];
     console.log(`  ${selectedFile}: ${bodies.length} executed`);
+  }
+  if (
+    countNames.some((name) => overall[0].data.counts[name] !== totals[name])
+  ) {
+    throw new Error(
+      "Overall execution summary disagrees with selected-file evidence.",
+    );
   }
   console.log(
     `Execution evidence verified for ${selected.length} selected test files.`,
