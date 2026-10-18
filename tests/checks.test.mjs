@@ -295,3 +295,56 @@ test("empty, malformed, and incomplete external runner evidence cannot turn a ze
     });
   }
 });
+
+test("incomplete or contradictory summary counts cannot certify successful runner output", async (t) => {
+  for (const scenario of [
+    "missing file count",
+    "missing overall counts",
+    "contradictory totals",
+  ]) {
+    await t.test(scenario, async (t) => {
+      const directory = await workspace(t);
+      const file = path.join(directory, "tests/body.test.mjs");
+      await writeFile(file, passingBody);
+      const fileCounts = {
+        tests: 1,
+        passed: 1,
+        failed: 0,
+        cancelled: 0,
+        skipped: 0,
+        todo: 0,
+      };
+      const overallCounts = { ...fileCounts };
+      if (scenario === "missing file count") delete fileCounts.tests;
+      if (scenario === "contradictory totals") overallCounts.tests = 2;
+      const evidence =
+        [
+          {
+            type: "test:pass",
+            data: { file, name: "fixture body", kind: "test" },
+          },
+          {
+            type: "test:summary",
+            data: { file, success: true, counts: fileCounts },
+          },
+          {
+            type: "test:summary",
+            data: {
+              success: true,
+              counts:
+                scenario === "missing overall counts"
+                  ? undefined
+                  : overallCounts,
+            },
+          },
+          { type: "execution:complete" },
+        ]
+          .map((record) => JSON.stringify(record))
+          .join("\n") + "\n";
+      const options = await controlledRunner(directory, evidence);
+      const result = await check(directory, { NODE_OPTIONS: options });
+      assert.notEqual(result.code, 0, result.output);
+      assert.match(result.output, /Contributor tests failed/);
+    });
+  }
+});

@@ -7,7 +7,9 @@ export default async function* executionEvidence(source) {
         data: {
           file: data.file,
           name: data.name,
-          kind: data.details?.type,
+          // Node 22.13 leaves the ordinary test type undefined; suites
+          // explicitly carry "suite". File wrappers still need a real file summary.
+          kind: data.details?.type ?? "test",
           skip: data.skip,
           todo: data.todo,
         },
