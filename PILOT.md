@@ -62,14 +62,18 @@ No deterministic offline demo runner is included. Automated tests use a controll
 
 ## Validation record
 
-Fill this with observed evidence before calling the pilot verified. Do not replace a failed or blocked live attempt with fixture results.
+Observed on 2026-10-18 with Node 24.19.0, Chromium, Git, and Codex CLI 0.159.2 logged in with ChatGPT. The live model loop remains blocked; fixture results do not replace it.
 
 | Check | Observed result |
 | --- | --- |
-| Install, application tests, production build | Pending integration validation |
-| Sample baseline tests | Pending final integration validation |
-| Focused browser smoke: owner/member, shared updates, movement, settings, chat, request, cancellation, review/acceptance | Pending browser validation |
-| Real Codex: two overlapping sample tasks, changes, tests, follow-up, human review | Pending live attempt; record exact auth/connectivity/protocol blocker if blocked |
-| Explicit failure/retry, reconnect, restart recovery | Pending integration validation |
+| Install, application tests, production build | Passed: npm install/ci, npm test, npm run build |
+| Sample baseline tests | Passed: all five bundled game baseline tests |
+| Focused browser smoke: owner/member, shared updates, movement, settings, chat, request, cancellation, review/acceptance | Passed: five Chromium smoke scenarios, including two-session updates, approvals/questions, cancellation, retry, acceptance, workflow/capacity settings, and disconnect/reconnect |
+| Real Codex: two overlapping sample tasks, changes, tests, follow-up, human review | BLOCKED: two real app-server sessions overlapped, but model requests were rejected by the environment proxy (HTTP CONNECT 403); no model edits or successful live verification |
+| Explicit failure/retry, reconnect, restart recovery | Passed via authenticated HTTP with real SQLite/Git and the controlled external runner fixture; browser checks cover failure/retry/reconnect |
 
 For any blocked item include the exact command or operation, observed error, and which behavior remains unverified. Login diagnostics alone and passing fixture tests are insufficient evidence for the live loop.
+
+The real attempt used the two seeded tasks and independent worktrees. Run IDs were `82f17105-9b34-4e68-83ee-e3d4e4aa571b` and `6a62c359-d2b8-4a31-8351-75c134711d46`; both reached Running with distinct Codex conversations. The proxy reported `HTTP CONNECT failed with status 403` for `wss://chatgpt.com/backend-api/codex/responses`, followed by `Reconnecting... waiting for network`. Both were stopped after a two-minute observation window, retaining interrupted history. The initial attempt also exposed a read-only Codex runtime directory; a scoped write grant allowed initialization on the second attempt. No proxy bypass or replacement credentials were used.
+
+Issue #1 remains open: successful overlapping real-model edits, configured verification, resumed follow-up context, and human acceptance still need evaluation on a host permitted to reach the model service. The app's repeatable verification paths passed with fixtures; the live loop has not been claimed as verified.

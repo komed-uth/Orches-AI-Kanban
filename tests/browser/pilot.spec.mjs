@@ -1,5 +1,8 @@
 import { test, expect } from "@playwright/test";
 
+// One pilot walkthrough shares the disposable host, accounts, and retained history.
+test.describe.configure({ mode: "serial" });
+
 test("owner and invited member share a persistent board with accessible task movement", async ({
   page,
   browser,
