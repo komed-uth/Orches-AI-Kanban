@@ -377,8 +377,26 @@ for (const mode of ["retry-blocked", "connected-timeout"])
         run.connectivity,
         mode === "retry-blocked" ? "blocked" : "unverified",
       );
-      if (mode === "retry-blocked")
-        assert.match(run.connectivityBlocker, /CONNECT 403/);
+      if (mode === "retry-blocked") {
+        assert.equal(
+          run.connectivityBlocker,
+          "Proxy connection rejected in interrupted output; inspect retained runtime.",
+        );
+        assert.equal(s.evidence.missing, true);
+        assert.equal(s.phases.output, "incomplete");
+        const events = (await readFile(join(f.output, "events.ndjson"), "utf8"))
+          .trim()
+          .split("\n")
+          .map(JSON.parse);
+        assert.ok(
+          events.some(
+            (event) =>
+              event.runId === run.id &&
+              event.textOmitted ===
+                "Unterminated output omitted after interruption",
+          ),
+        );
+      }
     }
   });
 for (const mode of ["deadline", "SIGTERM"])
