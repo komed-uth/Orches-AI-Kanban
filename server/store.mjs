@@ -2,6 +2,12 @@ import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 
+// Reconcile rollback in place: long-running jobs retain references to their records.
+function restore(target,source){
+ if(Array.isArray(source)){const old=[...target];target.splice(0,target.length,...source.map((value,i)=>{if(value&&typeof value==='object'){const match=value.id?old.find(x=>x?.id===value.id):old[i];if(match&&typeof match==='object'){restore(match,value);return match;}}return structuredClone(value);}));return;}
+ for(const key of Object.keys(target))if(!Object.hasOwn(source,key))delete target[key];
+ for(const [key,value] of Object.entries(source)){if(value&&typeof value==='object'&&target[key]&&typeof target[key]==='object')restore(target[key],value);else target[key]=structuredClone(value);}
+}
 export function createStore(dataDir) {
  mkdirSync(dataDir,{recursive:true});
  const db=new DatabaseSync(join(dataDir,'orches.sqlite'));
@@ -14,7 +20,7 @@ export function createStore(dataDir) {
   if(depth) return fn(state);
   const previous=structuredClone(state); depth++; pending=[];
   try { const result=fn(state); persist(); depth--; const events=pending; pending=[]; for(const event of events) for(const handler of listeners) {try{handler(event);}catch{}} return result; }
-  catch(error){state=previous;depth=0;pending=[];throw error;}
+  catch(error){restore(state,previous);depth=0;pending=[];throw error;}
  },event(type,data={}) {let event; const append=()=>{event={...data,id:(state.events.at(-1)?.id??0)+1,type,createdAt:new Date().toISOString()};state.events.push(event);pending.push(event);}; if(depth)append();else store.transaction(append);return event;},subscribe(handler){listeners.add(handler);return()=>listeners.delete(handler);},close(){db.close();}};
  return store;
 }

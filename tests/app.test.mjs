@@ -37,3 +37,16 @@ test('tasks validate references and protect execution metadata while preserving 
  assert.equal((await request(`/api/tasks/${id}`))[1].task.description,'Click audio');
  }finally{await application.close();await rm(dataDir,{recursive:true,force:true});}
 });
+
+test('invitations are single use, members cannot configure host, and replay follows authenticated task changes',async()=>{
+ const dataDir=await mkdtemp(join(tmpdir(),'orches-team-'));const app=await createApplication({dataDir});const server=app.app.listen(0,'127.0.0.1');await new Promise(r=>server.once('listening',r));const base=`http://127.0.0.1:${server.address().port}`;
+ const request=async(path,method='GET',body,cookie)=>{const r=await fetch(base+path,{method,headers:{'content-type':'application/json',...(cookie?{cookie}:{})},...(body?{body:JSON.stringify(body)}:{})});return {status:r.status,body:await r.json(),cookie:r.headers.get('set-cookie')?.split(';')[0]};};
+ try{const owner=await request('/api/setup','POST',{username:'owner',password:'long-password'});const invite=await request('/api/invitations','POST',{expiresInHours:1},owner.cookie);assert.equal(invite.status,201);
+ const joined=await request('/api/join','POST',{token:invite.body.token,username:'member',password:'long-password'});assert.equal(joined.status,201);assert.equal(joined.body.user.role,'member');
+ assert.equal((await request('/api/join','POST',{token:invite.body.token,username:'second',password:'long-password'})).status,409);
+ assert.equal((await request('/api/settings','PATCH',{capacity:5},joined.cookie)).status,403);
+ const board=await request('/api/snapshot','GET',null,owner.cookie);const cursor=board.body.cursor;const task=board.body.tasks[0];await request(`/api/tasks/${task.id}`,'PATCH',{title:'Shared change',assigneeId:joined.body.user.id},joined.cookie);
+ const response=await fetch(base+`/api/events?after=${cursor}`,{headers:{cookie:owner.cookie}});const reader=response.body.getReader();const {value}=await reader.read();const text=new TextDecoder().decode(value);assert.match(text,/task.updated/);assert.match(text,new RegExp(task.id));await reader.cancel();
+ assert.equal((await request('/api/snapshot','GET',null,owner.cookie)).body.tasks.find(x=>x.id===task.id).title,'Shared change');
+ }finally{await app.close();await rm(dataDir,{recursive:true,force:true});}
+});
