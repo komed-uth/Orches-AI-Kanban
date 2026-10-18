@@ -7,6 +7,7 @@ import { execFileSync } from 'node:child_process';
 import { createStore } from './store.mjs';
 import { seedSampleProject } from './sample.mjs';
 import { inspectCodexHost } from './codex.mjs';
+import { createScheduler } from './scheduler.mjs';
 
 const root=resolve(dirname(fileURLToPath(import.meta.url)),'..');
 export const defaultStatuses=()=>['Backlog','Ready','In Progress','Review','Done','Blocked'].map((name,i)=>({id:['backlog','ready','progress','review','done','blocked'][i],name,kind:['backlog','ready','execution','review','done','blocked'][i]}));
@@ -23,10 +24,8 @@ async function seed(store,dataDir){
 }
 export async function createApplication({dataDir=resolve('.orches-data'),runnerFactory,schedulerFactory}={}){
  const store=createStore(dataDir);await seed(store,dataDir);
- let scheduler;
- if(schedulerFactory)scheduler=await schedulerFactory({store,dataDir,runnerFactory});
- else if(existsSync(join(root,'server/scheduler.mjs'))) {try {const {createScheduler}=await import('./scheduler.mjs');scheduler=await createScheduler({store,dataDir,runnerFactory});}catch(error){if(error.code!=='ERR_MODULE_NOT_FOUND')throw error;}}
- const app=express();app.disable('x-powered-by');app.use(express.json({limit:'1mb'}));
+ const scheduler=await (schedulerFactory??createScheduler)({store,dataDir,runnerFactory});
+ const app=express();app.disable('x-powered-by');app.use(express.json({limit:'1mb'}));app.use((req,res,next)=>{req.body??={};next();});
  const streams=new Map(); const servers=new Set(); const originalListen=app.listen.bind(app);app.listen=(...args)=>{const server=originalListen(...args);servers.add(server);server.on('close',()=>servers.delete(server));return server;};
  const sessionOf=req=>{const token=(req.headers.cookie??'').split(';').map(x=>x.trim()).find(x=>x.startsWith('orches_session='))?.slice(15);return store.state.sessions.find(x=>x.token===token&&x.expiresAt>Date.now());};
  const signedIn=(req,res,next)=>{const session=sessionOf(req);const user=store.state.users.find(x=>x.id===session?.userId);if(!user)return res.status(401).json({error:'Sign in required.'});req.user=user;req.session=session;next();};
