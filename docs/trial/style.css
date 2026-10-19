@@ -1,0 +1,15 @@
+:root { font-family: system-ui, sans-serif; color: #182235; background: #f4f7fb; }
+body { max-width: 72rem; margin: auto; padding: 1.5rem; }
+a { color: #164da1; }
+header, article, form, main > section { background: white; border: 1px solid #c8d1e0; border-radius: .6rem; padding: 1rem; margin: 1rem 0; }
+button, input, textarea, select { font: inherit; padding: .55rem; }
+button { cursor: pointer; border: 1px solid #667895; background: #eef3fd; border-radius: .3rem; }
+button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible { outline: 3px solid #225dcc; outline-offset: 2px; }
+label { display: block; margin: .7rem 0; font-weight: 600; }
+input, textarea, select { display: block; box-sizing: border-box; width: 100%; max-width: 42rem; }
+#tasks { display: grid; grid-template-columns: repeat(auto-fit,minmax(min(100%,20rem),1fr)); gap: 1rem; background: transparent; border: 0; padding: 0; }
+article { margin: 0; overflow-wrap: anywhere; }
+article p { white-space: pre-wrap; }
+[role=alert] { color: #9a2518; font-weight: 600; }
+#recovery { border: 2px solid #b94a1c; }
+[hidden] { display: none !important; }
