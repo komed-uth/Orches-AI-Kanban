@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Orches · Pages backlog trial</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <header>
+      <a href="../">GitHub Issues dashboard</a>
+      <h1>Pages backlog trial</h1>
+    </header>
+    <main>
+      <p>
+        This is a browser-local, simulated trial. No agents execute, no GitHub
+        Issues are changed, and edits do not synchronize across devices or
+        teammates. No credentials or backend are required.
+      </p>
+      <section aria-label="Sample project">
+        <h2>Gem Trail</h2>
+        <p>
+          A browser game sample project. Configuration: native browser
+          JavaScript; no build; suggested verification:
+          <code>node --test tests/*.test.mjs</code>. This trial never runs
+          commands.
+        </p>
+      </section>
+      <p id="persistence" role="status"></p>
+      <section id="recovery" hidden aria-label="Storage recovery">
+        <p id="recovery-message" role="alert"></p>
+        <button id="retry" type="button">Retry saved storage</button>
+        <button id="temporary" type="button">Continue without saving</button>
+        <button id="recover-reset" type="button">
+          Replace saved trial with samples
+        </button>
+      </section>
+      <div class="actions">
+        <button id="new" type="button">New task</button>
+        <button id="reset" type="button">Reset trial data</button>
+      </div>
+      <form id="editor" hidden>
+        <h2 id="editor-heading">New task</h2>
+        <p id="identity"></p>
+        <label>Title<input name="title" required maxlength="200" /></label>
+        <label
+          >Description<textarea name="description" rows="3"></textarea>
+        </label>
+        <label
+          >Acceptance criteria (one per line)<textarea
+            name="criteria"
+            rows="4"
+          ></textarea>
+        </label>
+        <label
+          >Priority<select name="priority" aria-label="Priority">
+            <option value="low">low</option>
+            <option value="medium" selected>medium</option>
+            <option value="high">high</option>
+          </select></label
+        >
+        <label
+          >Prerequisite tasks<select
+            name="prerequisites"
+            multiple
+            size="4"
+          ></select
+        ></label>
+        <p>
+          Use Ctrl (Windows/Linux) or Command (Mac) to select multiple
+          prerequisites or deselect one. References use stable task IDs.
+        </p>
+        <p id="error" role="alert"></p>
+        <button type="submit">Save task</button>
+        <button id="cancel" type="button">Cancel</button>
+      </form>
+      <section id="tasks" aria-label="Backlog"></section>
+      <noscript>Enable JavaScript to use this local trial.</noscript>
+    </main>
+    <script type="module" src="./app.mjs"></script>
+  </body>
+</html>
