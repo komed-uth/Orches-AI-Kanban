@@ -19,12 +19,30 @@
       </p>
       <section aria-label="Sample project">
         <h2>Gem Trail</h2>
+        <p>Configuration is simulated; this trial never runs commands.</p>
+        <form id="settings">
+          <label>Simulated repository<input name="repository" /></label>
+          <label>Test/check command<input name="checkCommand" /></label>
+          <label>Build command (optional)<input name="buildCommand" /></label>
+          <label
+            >Demo capacity<input
+              name="capacity"
+              type="number"
+              min="1"
+              max="100"
+              required
+          /></label>
+          <p id="settings-error" role="alert"></p>
+          <button type="submit">Save project settings</button>
+        </form>
+      </section>
+      <section id="simulation-recovery" hidden aria-label="Simulation recovery">
         <p>
-          A browser game sample project. Configuration: native browser
-          JavaScript; no build; suggested verification:
-          <code>node --test tests/*.test.mjs</code>. This trial never runs
-          commands.
+          Simulation paused after reload. Saved attempts and their slots are
+          retained; nothing ran while this page was closed. Resume to continue
+          existing attempts and admit eligible Ready work.
         </p>
+        <button id="resume" type="button">Resume simulation</button>
       </section>
       <p id="persistence" role="status"></p>
       <section id="recovery" hidden aria-label="Storage recovery">
@@ -74,7 +92,7 @@
         <button type="submit">Save task</button>
         <button id="cancel" type="button">Cancel</button>
       </form>
-      <section id="tasks" aria-label="Backlog"></section>
+      <section id="tasks" aria-label="Tasks"></section>
       <noscript>Enable JavaScript to use this local trial.</noscript>
     </main>
     <script type="module" src="./app.mjs"></script>
