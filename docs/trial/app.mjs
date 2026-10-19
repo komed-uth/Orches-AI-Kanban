@@ -458,6 +458,10 @@ function completeRecovery() {
   controls();
   savedStatus();
 }
+function adoptState(next) {
+  state = next;
+  readinessErrors.clear();
+}
 function save(next) {
   if (!temporary) {
     try {
@@ -468,7 +472,7 @@ function save(next) {
       return false;
     }
   }
-  state = next;
+  adoptState(next);
   if (state.tasks.every((t) => t.status === "backlog"))
     simulationPaused = false;
   pendingState = null;
@@ -481,7 +485,7 @@ function load() {
     const raw = localStorage.getItem(KEY);
     const next = raw === null ? sample() : validateSaved(JSON.parse(raw));
     if (raw === null) localStorage.setItem(KEY, JSON.stringify(next));
-    state = next;
+    adoptState(next);
     simulationPaused = next.tasks.some(
       (t) => t.status === "ready" || t.status === "active",
     );
@@ -584,7 +588,7 @@ $("retry").addEventListener("click", () => {
 });
 $("temporary").addEventListener("click", () => {
   temporary = true;
-  state = pendingState || state || sample();
+  adoptState(pendingState || state || sample());
   pendingState = null;
   render();
   editor.hidden = true;

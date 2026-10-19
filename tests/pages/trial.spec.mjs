@@ -557,3 +557,33 @@ test("failed Ready persistence blocks all mutation controls and explicit retry r
   await expect(count.getByText(/^Attempt 1/)).toHaveText(originalAttempt);
   await expect(restart.getByText(/^Attempt 1/)).toHaveText(attempt);
 });
+
+test("reset cancellation retains readiness feedback and confirmed reset clears stale validation", async ({
+  page,
+}) => {
+  await page.goto("/trial/");
+  const count = taskCard(page, "task-gem-count");
+  await count.getByRole("button", { name: "Edit task" }).click();
+  await page.getByLabel("Acceptance criteria").fill("");
+  await page.getByRole("button", { name: "Save task" }).click();
+  await count.getByRole("button", { name: "Move to Ready" }).click();
+  await expect(count.getByRole("alert")).toContainText(
+    "Add at least one acceptance criterion",
+  );
+  page.once("dialog", (dialog) => dialog.dismiss());
+  await page
+    .getByRole("button", { name: "Reset trial data", exact: true })
+    .click();
+  await expect(count.getByRole("alert")).toContainText(
+    "Add at least one acceptance criterion",
+  );
+  await expect(count.locator("ol li")).toHaveCount(0);
+  page.once("dialog", (dialog) => dialog.accept());
+  await page
+    .getByRole("button", { name: "Reset trial data", exact: true })
+    .click();
+  await expect(count.locator("ol li")).toHaveCount(2);
+  await expect(count.getByRole("alert")).toBeEmpty();
+  await count.getByRole("button", { name: "Move to Ready" }).click();
+  await expect(count).toContainText("Status: In progress");
+});
