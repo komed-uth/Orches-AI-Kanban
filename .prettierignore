@@ -1,5 +1,6 @@
 # The independent GitHub Pages dashboard retains its existing formatting.
-docs/
+docs/*
+!docs/trial/
 tests/board.test.mjs
 .github/workflows/pages.yml
 
