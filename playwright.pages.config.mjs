@@ -1,14 +1,10 @@
+import { chromiumLaunchOptions } from "./scripts/chromium.mjs";
 import { defineConfig } from "@playwright/test";
 export default defineConfig({
   testDir: "./tests/pages",
   use: {
     baseURL: "http://127.0.0.1:4320",
-    launchOptions: {
-      args: ["--no-sandbox"],
-      ...(process.env.ORCHES_CHROMIUM
-        ? { executablePath: process.env.ORCHES_CHROMIUM }
-        : {}),
-    },
+    launchOptions: chromiumLaunchOptions(),
     trace: "retain-on-failure",
   },
   webServer: {
