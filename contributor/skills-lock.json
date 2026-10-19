@@ -1,0 +1,14 @@
+{
+  "repository": "https://github.com/mattpocock/skills.git",
+  "revision": "49dd158d1076134a641b33efb035946536778336",
+  "skills": {
+    "implement-spec": "skills/engineering/implement-spec",
+    "tdd": "skills/engineering/tdd",
+    "code-review": "skills/engineering/code-review",
+    "retro": "skills/engineering/retro",
+    "to-spec": "skills/engineering/to-spec",
+    "to-tickets": "skills/engineering/to-tickets",
+    "writing-for-agents": "skills/productivity/writing-for-agents",
+    "codebase-design": "skills/engineering/codebase-design"
+  }
+}

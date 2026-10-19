@@ -1,3 +1,7 @@
+import {
+  supportedRuntime,
+  gitWorktreeSupported,
+} from "./host-requirements.mjs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { resolve, join, dirname } from "node:path";
@@ -106,21 +110,13 @@ try {
       timeout: 10000,
       maxBuffer: 4096,
     });
-    const version = /^git version (\d+)\.(\d+)/.exec(stdout);
-    summary.host.gitWorktreeSupported = Boolean(
-      version &&
-      (Number(version[1]) > 2 ||
-        (Number(version[1]) === 2 && Number(version[2]) >= 5)),
-    );
+    summary.host.gitWorktreeSupported = gitWorktreeSupported(stdout);
   } catch {
     summary.host.gitWorktreeSupported = false;
   }
   if (!summary.host.gitWorktreeSupported)
     summary.blocker = "Install Git with worktree support (2.5+) on PATH.";
-  const [major, minor] = process.versions.node.split(".").map(Number);
-  summary.host.supported =
-    process.platform === "linux" &&
-    (major > 22 || (major === 22 && minor >= 13));
+  summary.host.supported = supportedRuntime();
   summary.host.version = redact(summary.host.version ?? "").slice(0, 256);
   const writable = async (directory) => {
     let probe;

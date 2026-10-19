@@ -12,9 +12,13 @@
     "start": "node server/index.mjs",
     "test:browser": "playwright test",
     "test:pages": "playwright test --config playwright.pages.config.mjs",
-    "format": "prettier --write \"{server,client,sample-game,scripts,tests}/**/*.{mjs,js,jsx,json,css,html}\" \"{*.mjs,package.json,.github/workflows/test.yml}\"",
-    "format:check": "prettier --check \"{server,client,sample-game,scripts,tests}/**/*.{mjs,js,jsx,json,css,html}\" \"{*.mjs,package.json,.github/workflows/test.yml}\"",
-    "evaluate": "node scripts/evaluate.mjs"
+    "format": "prettier --write \"{server,client,sample-game,scripts,tests,docs/trial}/**/*.{mjs,js,jsx,json,css,html}\" \"{*.mjs,package.json,contributor/skills-lock.json,.github/workflows/test.yml}\"",
+    "format:check": "prettier --check \"{server,client,sample-game,scripts,tests,docs/trial}/**/*.{mjs,js,jsx,json,css,html}\" \"{*.mjs,package.json,contributor/skills-lock.json,.github/workflows/test.yml}\"",
+    "evaluate": "node scripts/evaluate.mjs",
+    "setup": "node scripts/setup.mjs",
+    "ready": "node scripts/ready.mjs",
+    "skills:setup": "node scripts/skills.mjs",
+    "pr:edit": "node scripts/github-pr.mjs"
   },
   "dependencies": {
     "express": "^5.1.0",
