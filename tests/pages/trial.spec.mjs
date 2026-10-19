@@ -29,7 +29,7 @@ test("create and edit all task fields persist after reload with stable reference
   ]);
   await expect(card).toContainText("high");
   await expect(card).toContainText("Show the remaining gem count");
-  const identity = await card.getAttribute("data-task-id");
+  const identity = await card.getByText(/^Task:/).innerText();
   await card.getByRole("button", { name: "Edit task" }).click();
   await page.getByLabel("Title", { exact: true }).fill("Keyboard controls");
   await page
@@ -48,7 +48,7 @@ test("create and edit all task fields persist after reload with stable reference
       exact: true,
     }),
   });
-  await expect(edited).toHaveAttribute("data-task-id", identity);
+  await expect(edited.getByText(/^Task:/)).toHaveText(identity);
   await expect(edited).toContainText("Updated instructions");
   await expect(edited.locator("ol li")).toHaveText([
     "Keyboard can complete the game",
