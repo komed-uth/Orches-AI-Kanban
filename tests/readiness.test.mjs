@@ -23,6 +23,9 @@ async function workspace(t) {
   await cp(path.join(root, "scripts"), path.join(dir, "scripts"), {
     recursive: true,
   });
+  await mkdir(path.join(dir, "server"));
+  for (const file of ["processes.mjs", "process-supervisor.mjs"])
+    await cp(path.join(root, "server", file), path.join(dir, "server", file));
   await cp(path.join(root, "package.json"), path.join(dir, "package.json"));
   await cp(path.join(root, ".npmrc"), path.join(dir, ".npmrc"));
   await symlink(
@@ -231,3 +234,102 @@ setInterval(()=>{},1000);
     [],
   );
 });
+
+async function waitForPids(filename, output) {
+  const deadline = Date.now() + 10000;
+  while (Date.now() < deadline) {
+    try {
+      return JSON.parse(await readFile(filename, "utf8"));
+    } catch (error) {
+      if (error.code !== "ENOENT" && !(error instanceof SyntaxError))
+        throw error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  assert.fail(`controlled probe did not start: ${output()}`);
+}
+async function assertProcessesStopped(pids) {
+  const deadline = Date.now() + 3000;
+  let alive;
+  do {
+    alive = [];
+    for (const pid of pids) {
+      try {
+        const status = await readFile(`/proc/${pid}/stat`, "utf8");
+        if (!/^\d+ \(.+\) Z /.test(status)) alive.push(pid);
+      } catch (error) {
+        if (error.code !== "ENOENT") throw error;
+      }
+    }
+    if (!alive.length) return;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  } while (Date.now() < deadline);
+  assert.deepEqual(
+    alive,
+    [],
+    "probes must stop even when readiness cannot run cleanup",
+  );
+}
+function killOwnedGroup(pid) {
+  try {
+    process.kill(-pid, "SIGKILL");
+  } catch (error) {
+    if (error.code !== "ESRCH") throw error;
+  }
+}
+
+for (const boundary of ["GitHub", "Chromium"]) {
+  test(`SIGKILL of readiness stops the held ${boundary} probe and its descendants`, async (t) => {
+    const { dir, env } = await workspace(t);
+    const pidfile = path.join(dir, "held-pids.json");
+    const executable = path.join(
+      dir,
+      "bin",
+      boundary === "GitHub" ? "gh" : "held-chromium",
+    );
+    await writeFile(
+      executable,
+      `#!/usr/bin/env node
+import {spawn} from 'node:child_process';import {writeFileSync} from 'node:fs';import {createServer} from 'node:http';
+const child=spawn(process.execPath,['-e',"process.on('SIGTERM',()=>{});setInterval(()=>{},1000)"],{stdio:'ignore'});
+const record=()=>writeFileSync(${JSON.stringify(pidfile)},JSON.stringify([process.pid,child.pid]));
+if(${JSON.stringify(boundary === "Chromium")}) {
+  const server=createServer((_req,res)=>res.end('held browser service'));
+  server.listen(0,'127.0.0.1',()=>{
+    writeFileSync(${JSON.stringify(pidfile + ".url")},'http://127.0.0.1:'+server.address().port+'/');record();
+  });
+} else record();
+process.on('SIGTERM',()=>{});setInterval(()=>{},1000);
+`,
+    );
+    await chmod(executable, 0o755);
+    const child = spawn(process.execPath, ["scripts/ready.mjs"], {
+      cwd: dir,
+      env: {
+        ...env,
+        ORCHES_CHROMIUM:
+          boundary === "Chromium"
+            ? executable
+            : path.join(dir, "missing-browser"),
+      },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let output = "";
+    child.stdout.on("data", (chunk) => (output += chunk));
+    child.stderr.on("data", (chunk) => (output += chunk));
+    const completion = new Promise((resolve, reject) => {
+      child.once("error", reject);
+      child.once("close", resolve);
+    });
+    t.after(() => child.kill("SIGKILL"));
+    const pids = await waitForPids(pidfile, () => output);
+    t.after(() => pids.forEach(killOwnedGroup));
+    child.kill("SIGKILL");
+    await completion;
+    await assertProcessesStopped(pids);
+    if (boundary === "Chromium") {
+      const url = await readFile(pidfile + ".url", "utf8");
+      await assert.rejects(fetch(url, { signal: AbortSignal.timeout(1000) }));
+    }
+  });
+}

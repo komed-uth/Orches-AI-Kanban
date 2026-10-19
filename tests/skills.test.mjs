@@ -47,6 +47,9 @@ test("skill setup installs only the locked bundle, repeats safely, and detects m
   await cp(path.join(root, "scripts"), path.join(dir, "scripts"), {
     recursive: true,
   });
+  await mkdir(path.join(dir, "server"));
+  for (const file of ["processes.mjs", "process-supervisor.mjs"])
+    await cp(path.join(root, "server", file), path.join(dir, "server", file));
   await mkdir(path.join(dir, "contributor"));
   await writeFile(
     path.join(dir, "contributor/skills-lock.json"),

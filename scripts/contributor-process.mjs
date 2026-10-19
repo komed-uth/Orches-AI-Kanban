@@ -1,6 +1,7 @@
-import { spawn } from "node:child_process";
+import { spawnManaged } from "../server/processes.mjs";
 
-// Own a process group so a deadline also stops browser/helper descendants.
+// Reuse the application lifetime-pipe supervisor: probes also stop if this
+// contributor process dies before its deadline or signal handler can run.
 export function command(
   command,
   args,
@@ -13,10 +14,9 @@ export function command(
   } = {},
 ) {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, {
+    const child = spawnManaged(command, args, {
       cwd,
       env,
-      detached: process.platform !== "win32",
       stdio: ["pipe", "pipe", "pipe"],
     });
     let stdout = "",
